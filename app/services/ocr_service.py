@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import logging
 import multiprocessing
 import os
 import threading
@@ -26,6 +27,8 @@ PROXY_ENV_KEYS = (
     "all_proxy",
     "no_proxy",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _clear_proxy_env() -> None:
@@ -72,6 +75,8 @@ class OcrService:
         self.settings = settings or get_settings()
         self._executor: ProcessPoolExecutor | None = None
         self._executor_lock = threading.Lock()
+        self._bootstrap_lock = threading.Lock()
+        self._engine_bootstrapped = False
 
     def status_payload(self) -> dict[str, Any]:
         missing = self._missing_dependencies()
@@ -84,6 +89,7 @@ class OcrService:
             "workers": self.settings.tencent_ocr_workers,
             "timeout_seconds": self.settings.tencent_ocr_timeout_seconds,
             "executor_ready": self._executor is not None,
+            "engine_bootstrapped": self._engine_bootstrapped,
         }
 
     def warmup(self) -> None:
@@ -95,11 +101,13 @@ class OcrService:
                 "本地 OCR 依赖没装全，先运行 pip install -r requirements.txt，别让发动机缺缸还硬跑。",
                 details={"missing_dependencies": missing},
             )
+        self._bootstrap_engine_once()
         executor = self._ensure_executor()
-        futures = [executor.submit(_warmup_worker, index) for index in range(self.settings.tencent_ocr_workers)]
         timeout = max(self.settings.tencent_ocr_timeout_seconds, 1)
-        for future in futures:
-            future.result(timeout=timeout)
+        # 首次启动先保证模型在主进程完整落地，再做单 worker 预热，
+        # 避免 Windows 下多个进程同时下载/加载同一个 onnx 文件导致文件占用和损坏竞争。
+        future = executor.submit(_warmup_worker, 0)
+        future.result(timeout=timeout)
 
     def shutdown(self) -> None:
         with self._executor_lock:
@@ -134,6 +142,7 @@ class OcrService:
     def _run_worker(self, image_bytes: bytes, prompt_text: str) -> dict[str, Any]:
         timeout = max(self.settings.tencent_ocr_timeout_seconds, 1)
         payload_prompt = prompt_text or ""
+        self._bootstrap_engine_once()
         for attempt in range(1, 3):
             executor = self._ensure_executor()
             future = executor.submit(
@@ -154,6 +163,21 @@ class OcrService:
             except Exception:
                 raise
         raise RuntimeError("OCR worker 未返回结果")
+
+    def _bootstrap_engine_once(self) -> None:
+        if self._engine_bootstrapped:
+            return
+        with self._bootstrap_lock:
+            if self._engine_bootstrapped:
+                return
+            started_at = time.perf_counter()
+            _clear_proxy_env()
+            _load_adapter_module().get_engine()
+            self._engine_bootstrapped = True
+            logger.info(
+                "OCR bootstrap finished in %.2f ms",
+                round((time.perf_counter() - started_at) * 1000, 2),
+            )
 
     def _ensure_executor(self) -> ProcessPoolExecutor:
         with self._executor_lock:

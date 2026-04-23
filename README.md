@@ -62,6 +62,42 @@
 - `APP_HOST=127.0.0.1`
 - `APP_PORT=8787`
 
+## 启动进程与 OCR Worker 说明
+
+本项目本地默认通过 [start.bat](E:/开源项目/glmDesk/start.bat) 启动：
+
+- `uvicorn app.main:app --host %APP_HOST% --port %APP_PORT% --reload`
+
+这意味着正常开发启动时通常会看到：
+
+- `1` 个 `uvicorn` reload 监控进程
+- `1` 个实际承载 FastAPI 的应用进程
+- `N` 个 OCR 进程池 worker 上限，其中 `N = TENCENT_OCR_WORKERS`
+
+说明：
+
+- 项目没有配置 `uvicorn --workers`，所以 Web 服务本身不是多 worker 部署
+- OCR 并发是独立进程池，不是 `uvicorn` worker
+- 多账号调度是单应用进程里多线程拉任务，真正重 CPU 的 OCR 再交给 OCR 进程池
+- 启动预热阶段现在只主动预热 `1` 个 OCR worker，避免首次下载 RapidOCR 模型时多个进程同时抢同一个 `.onnx` 文件
+- 真正运行时 OCR 并发上限仍然由 `TENCENT_OCR_WORKERS` 控制
+
+`TENCENT_OCR_WORKERS` 默认值不是写死 `4`，而是按 CPU 自动算：
+
+- `max(1, min(4, os.cpu_count() or 1))`
+
+举例：
+
+- `1` 核机器默认 `1`
+- `2` 核机器默认 `2`
+- `8` 核机器默认 `4`
+
+如果你想强制单路 OCR，直接把：
+
+- `TENCENT_OCR_WORKERS=1`
+
+写进 `.env` 就行。
+
 ## 页面使用
 
 ### 1. 导入账号
@@ -354,12 +390,49 @@ TENCENT_CAPTCHA_MIN_CONFIDENCE=0.55
 TENCENT_CAPTCHA_NODE=node
 TENCENT_OCR_ENABLED=1
 TENCENT_OCR_INCLUDE_DEBUG=0
+TENCENT_OCR_WORKERS=4
+TENCENT_OCR_TIMEOUT_SECONDS=6
+RUNTIME_LOG_LEVEL=INFO
+RUNTIME_LOG_RETENTION_DAYS=7
 ```
 
-说明：
+布尔值参数支持：
 
-- `BROWSER_IMPERSONATE` 现在主要作为全局兜底值
+- `1 / true / yes / on` 表示开启
+- 其他值视为关闭
+
+各参数含义如下：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `APP_HOST` | `127.0.0.1` | Web 服务监听地址，`start.bat` 会优先读取这个值来启动 `uvicorn` |
+| `APP_PORT` | `8787` | Web 服务监听端口，`start.bat` 会先杀掉当前端口已占用进程再启动 |
+| `DATA_DIR` | `data` | 本地数据目录，保存账号、会话、任务、日志、TDC 缓存；相对路径会按项目根目录解析 |
+| `BIGMODEL_API_BASE` | `https://www.bigmodel.cn/api` | BigModel API 根地址 |
+| `BIGMODEL_ORIGIN` | `https://www.bigmodel.cn` | BigModel 请求头 `Origin` 默认值 |
+| `BIGMODEL_REFERER` | `https://www.bigmodel.cn/glm-coding` | BigModel 请求头 `Referer` 默认值 |
+| `BROWSER_IMPERSONATE` | `chrome124` | `curl-cffi` 的全局兜底 `impersonate` 值；账号实际请求优先用账号自己的随机 `browser_impersonate` |
+| `REQUEST_TIMEOUT_SECONDS` | `20` | 上游 HTTP 请求超时时间，单位秒 |
+| `DEFAULT_LANGUAGE` | `zh-CN` | 默认请求语言，会写入 `Accept-Language` 和 `Set-Language` |
+| `TENCENT_CAPTCHA_DOMAIN` | `https://turing.captcha.qcloud.com` | 腾讯验证码域名 |
+| `TENCENT_CAPTCHA_AID` | `196026326` | 腾讯验证码业务 `aid` |
+| `TENCENT_CAPTCHA_ENTRY_URL` | `https://www.bigmodel.cn/glm-coding` | 腾讯验证码 `entry_url` 和默认 `Referer` |
+| `TENCENT_CAPTCHA_MAX_RETRIES` | `3` | 预留的验证码客户端最大重试次数配置，目前主链路重试逻辑由支付服务控制 |
+| `TENCENT_CAPTCHA_MIN_CONFIDENCE` | `0.55` | OCR 点位门禁最低置信度，小于这个值会直接刷新验证码重跑 |
+| `TENCENT_CAPTCHA_NODE` | `node` | 跑腾讯 TDC VM 时使用的 Node.js 命令 |
+| `TENCENT_OCR_ENABLED` | `1` | 是否启用本地 OCR；关闭后自动识别不可用 |
+| `TENCENT_OCR_INCLUDE_DEBUG` | `0` | 是否在 OCR 结果中附带调试图像 base64，开启后日志和响应会更重 |
+| `TENCENT_OCR_WORKERS` | 自动计算，最大不超过 `4` | OCR 进程池并发上限；建议普通机器配 `1-2`，高配机器可配 `3-4` |
+| `TENCENT_OCR_TIMEOUT_SECONDS` | `6` | 单次 OCR worker 超时秒数 |
+| `RUNTIME_LOG_LEVEL` | `INFO` | 正式运行日志级别 |
+| `RUNTIME_LOG_RETENTION_DAYS` | `7` | `app.log` 按天轮转保留天数 |
+
+补充说明：
+
+- `BROWSER_IMPERSONATE` 现在主要是全局兜底值和 transport 展示值
 - 真正运行时优先用账号自己的 `browser_impersonate`
+- 账号级 `browser_impersonate` 在首次导入账号时随机分配为 `chrome / edge / firefox`
+- 如果你把 `TENCENT_OCR_WORKERS` 配得太高，OCR 并发会更猛，但内存占用也会跟着往上窜，别一上来就梭哈
 
 ## 已知说明
 
