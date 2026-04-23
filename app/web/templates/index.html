@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GLM Desk</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
+    :root {
+      --bg: #f7f7f5;
+      --panel: #ffffff;
+      --panel-soft: #fafaf8;
+      --ink: #171717;
+      --muted: #5f5f5f;
+      --line: #e8e6e1;
+      --line-strong: #d9d4c6;
+      --accent: #d4af37;
+      --accent-deep: #b89626;
+      --ok: #166534;
+      --warn: #9a6700;
+      --bad: #b42318;
+      --shadow: 0 20px 50px rgba(23, 23, 23, 0.08);
+      --radius: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top right, rgba(212, 175, 55, 0.14), transparent 28rem),
+        linear-gradient(180deg, #fcfcfb 0%, #f4f3ef 100%);
+      font-family: "Fira Sans", "Segoe UI", sans-serif;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+      transform: none;
+      box-shadow: none;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      color: var(--ink);
+      background: #fff;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.18);
+    }
+
+    textarea {
+      min-height: 260px;
+      resize: vertical;
+      font-family: "Fira Code", monospace;
+      font-size: 12px;
+      line-height: 1.55;
+      background: #101010;
+      color: #f8f7f2;
+    }
+
+    .shell {
+      width: min(1500px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 24px 0 40px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .topbar,
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 18px 20px;
+    }
+
+    .headline {
+      display: grid;
+      gap: 6px;
+    }
+
+    .headline h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+    }
+
+    .headline p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .primary {
+      padding: 11px 16px;
+      color: #111;
+      background: var(--accent);
+      box-shadow: 0 10px 24px rgba(212, 175, 55, 0.28);
+    }
+
+    .secondary {
+      padding: 11px 16px;
+      color: #fff;
+      background: #171717;
+    }
+
+    .ghost {
+      padding: 10px 14px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--muted);
+      background: #f1f0eb;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      color: var(--ok);
+      background: rgba(22, 101, 52, 0.1);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      background: rgba(154, 103, 0, 0.12);
+    }
+
+    .pill.bad {
+      color: var(--bad);
+      background: rgba(180, 35, 24, 0.1);
+    }
+
+    .status {
+      display: none;
+      padding: 14px 18px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.92);
+      font-size: 13px;
+    }
+
+    .status.show {
+      display: block;
+    }
+
+    .status.ok {
+      border-color: rgba(22, 101, 52, 0.22);
+      color: var(--ok);
+    }
+
+    .status.warn {
+      border-color: rgba(154, 103, 0, 0.24);
+      color: var(--warn);
+    }
+
+    .status.bad {
+      border-color: rgba(180, 35, 24, 0.24);
+      color: var(--bad);
+    }
+
+    .panel {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      font-size: 17px;
+      letter-spacing: -0.02em;
+    }
+
+    .panel-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel-soft);
+    }
+
+    table {
+      width: 100%;
+      min-width: 1120px;
+      border-collapse: collapse;
+    }
+
+    thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 13px 14px;
+      color: var(--muted);
+      text-align: left;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      background: #f3f1eb;
+      border-bottom: 1px solid var(--line);
+    }
+
+    tbody td {
+      padding: 14px;
+      vertical-align: top;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.84);
+      font-size: 13px;
+    }
+
+    tbody tr:hover td {
+      background: #fffdf6;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .name-btn {
+      padding: 0;
+      color: var(--ink);
+      background: transparent;
+      font-weight: 700;
+      text-align: left;
+      max-width: 170px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .name-btn:hover {
+      color: var(--accent-deep);
+      box-shadow: none;
+    }
+
+    .stack {
+      display: grid;
+      gap: 6px;
+    }
+
+    .mono {
+      font-family: "Fira Code", monospace;
+      font-size: 12px;
+    }
+
+    .subtle {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .tiny-actions,
+    .schedule-box {
+      display: grid;
+      gap: 8px;
+    }
+
+    .col-account {
+      width: 190px;
+    }
+
+    .col-actions {
+      width: 138px;
+    }
+
+    .inline-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .mini-btn {
+      padding: 8px 10px;
+      color: var(--ink);
+      background: #fff;
+      border: 1px solid var(--line);
+      font-size: 12px;
+    }
+
+    .mini-btn.primary {
+      color: #111;
+      background: rgba(212, 175, 55, 0.18);
+      border: 1px solid rgba(212, 175, 55, 0.55);
+      box-shadow: none;
+    }
+
+    .qr-cell {
+      display: grid;
+      gap: 8px;
+      min-width: 160px;
+    }
+
+    .qr-cell img {
+      width: 118px;
+      height: 118px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 8px;
+    }
+
+    .qr-placeholder {
+      display: grid;
+      width: 118px;
+      height: 118px;
+      place-items: center;
+      border: 1px dashed var(--line-strong);
+      border-radius: 14px;
+      color: var(--muted);
+      background: #fcfbf8;
+      font-size: 12px;
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(17, 17, 17, 0.42);
+      backdrop-filter: blur(6px);
+    }
+
+    .modal.show {
+      display: flex;
+    }
+
+    .dialog {
+      width: min(720px, 100%);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 22px;
+      background: #fff;
+      box-shadow: 0 24px 80px rgba(17, 17, 17, 0.24);
+      overflow: hidden;
+    }
+
+    .dialog.large {
+      width: min(980px, 100%);
+    }
+
+    .dialog-head,
+    .dialog-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfaf7;
+    }
+
+    .dialog-foot {
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+    }
+
+    .dialog-head h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .dialog-body {
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 12px;
+    }
+
+    .double-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .context-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .context-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+      background: #fcfbf8;
+    }
+
+    .context-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .context-card strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 13px;
+      word-break: break-word;
+    }
+
+    .empty {
+      padding: 34px 18px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 980px) {
+      .topbar,
+      .panel-head,
+      .dialog-head,
+      .dialog-foot {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .double-grid,
+      .context-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .shell {
+        width: min(100% - 20px, 1500px);
+        padding-top: 14px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <section class="topbar">
+      <div class="headline">
+        <div class="inline-row">
+          <span class="pill">GLM Desk</span>
+          <span class="pill">{{ transport_name }}</span>
+          <span class="pill">列表模式</span>
+        </div>
+        <h1>支付运营后台</h1>
+        <p>导入账号后自动同步上下文和套餐。按账号维度管理套餐选择、定时启动、账号状态与支付二维码。</p>
+      </div>
+      <div class="toolbar">
+        <button id="import-trigger" class="primary" type="button">导入账号</button>
+        <button id="refresh-trigger" class="ghost" type="button">刷新列表</button>
+      </div>
+    </section>
+
+    <div id="status-bar" class="status"></div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>账号列表</h2>
+          <p>点击账号名查看上下文；切换套餐和定时后会直接保存。</p>
+        </div>
+        <div class="inline-row">
+          <span id="account-count" class="pill">0 个账号</span>
+          <span class="pill">二维码自动出图</span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-account">账号</th>
+              <th>模式 / 指纹</th>
+              <th>套餐</th>
+              <th>定时启动</th>
+              <th>状态</th>
+              <th>支付二维码</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="account-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div id="import-modal" class="modal" aria-hidden="true">
+    <div class="dialog">
+      <div class="dialog-head">
+        <div>
+          <h3>导入账号</h3>
+          <div class="hint">填写备注和 Token，确认后自动同步账号信息并拉取套餐。邀请码固定使用系统值。</div>
+        </div>
+        <button class="ghost" type="button" data-close="import-modal">关闭</button>
+      </div>
+      <div class="dialog-body">
+        <form id="import-form" class="form-grid">
+          <label>
+            账号备注
+            <input id="import-label" autocomplete="off" placeholder="例如 year-max-upgrade">
+          </label>
+          <label>
+            Token
+            <textarea id="import-token" placeholder="填写 bigmodel_token_production 的值"></textarea>
+          </label>
+          <div class="context-card">
+            <span>固定邀请码</span>
+            <strong>XOJGYOGNLN</strong>
+          </div>
+        </form>
+      </div>
+      <div class="dialog-foot">
+        <span class="hint">导入后会立即执行：保存账号 -> 同步上下文 -> 获取套餐。默认定时启动时间为 09:59:58。</span>
+        <div class="inline-row">
+          <button class="ghost" type="button" data-close="import-modal">取消</button>
+          <button id="import-submit" class="primary" type="button">确认导入</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="context-modal" class="modal" aria-hidden="true">
+    <div class="dialog large">
+      <div class="dialog-head">
+        <div>
+          <h3 id="context-title">账号上下文</h3>
+          <div id="context-subtitle" class="hint">-</div>
+        </div>
+        <button class="ghost" type="button" data-close="context-modal">关闭</button>
+      </div>
+      <div class="dialog-body">
+        <div id="context-grid" class="context-grid"></div>
+        <textarea id="context-json" readonly></textarea>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      accounts: [],
+      details: new Map(),
+      pollTimer: null
+    };
+
+    const DEFAULT_INVITATION_CODE = "XOJGYOGNLN";
+
+    document.addEventListener("DOMContentLoaded", () => {
+      bindEvents();
+      refreshDashboard();
+      startPolling();
+    });
+
+    function bindEvents() {
+      byId("import-trigger").addEventListener("click", () => toggleModal("import-modal", true));
+      byId("refresh-trigger").addEventListener("click", refreshDashboard);
+      byId("import-submit").addEventListener("click", handleImportAccount);
+      byId("account-tbody").addEventListener("click", handleTableClick);
+      byId("account-tbody").addEventListener("change", handleTableChange);
+      document.querySelectorAll("[data-close]").forEach(button => {
+        button.addEventListener("click", () => toggleModal(button.dataset.close, false));
+      });
+    }
+
+    async function refreshDashboard() {
+      try {
+        const accounts = await api("/api/accounts");
+        state.accounts = accounts;
+        const details = await Promise.all(accounts.map(account => api(`/api/accounts/${encodeURIComponent(account.id)}`)));
+        state.details = new Map(details.map(detail => [detail.account.id, detail]));
+        renderTable();
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    function renderTable() {
+      byId("account-count").textContent = `${state.accounts.length} 个账号`;
+      const tbody = byId("account-tbody");
+      if (!state.accounts.length) {
+        tbody.innerHTML = `<tr><td colspan="7" class="empty">还没有账号，先点击顶部“导入账号”。</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = state.accounts.map(account => {
+        const detail = state.details.get(account.id);
+        const session = detail?.session || {};
+        const latestTask = detail?.tasks?.[0] || null;
+        const products = Array.isArray(session.products) ? session.products : [];
+        const selectedProductId = session.selected_product_id || "";
+        const options = products.map(product => `
+          <option value="${esc(product.product_id)}" ${product.product_id === selectedProductId ? "selected" : ""}>
+            ${esc(product.product_name)} / ${esc(product.unit)}
+          </option>
+        `).join("");
+        const scheduleStatus = account.last_schedule_status || "-";
+        const qrHtml = latestTask?.qr_base64
+          ? `<div class="qr-cell">
+               <img src="${esc(latestTask.qr_base64)}" alt="支付二维码">
+               <div class="stack">
+                 <strong>¥ ${esc(latestTask.amount || "-")} · ${esc(latestTask.product_name || latestTask.product_id || "-")}</strong>
+                 <span class="subtle mono">bizId: ${esc(latestTask.biz_id || "-")}</span>
+               </div>
+             </div>`
+          : `<div class="qr-cell">
+               <div class="qr-placeholder">暂无二维码</div>
+               <span class="subtle">生成后可扫码支付</span>
+             </div>`;
+        return `
+          <tr data-account-id="${esc(account.id)}">
+            <td>
+              <div class="stack">
+                <button class="name-btn" type="button" data-action="open-context">${esc(account.label)}</button>
+                <span class="subtle">${esc(account.invitation_code || DEFAULT_INVITATION_CODE || "-")}</span>
+              </div>
+            </td>
+            <td>
+              <div class="stack">
+                <div class="inline-row">
+                  ${badge(session.purchase_mode === "new_purchase", "新购", "ok")}
+                  ${badge(session.purchase_mode === "upgrade", "升级", "warn")}
+                </div>
+                <span class="subtle mono">fp: ${esc(account.browser_impersonate || "-")}</span>
+              </div>
+            </td>
+            <td>
+              <div class="stack">
+                <select data-action="select-product">
+                  <option value="">请选择套餐</option>
+                  ${options}
+                </select>
+                <span class="subtle">${products.length ? `共 ${products.length} 个套餐` : "未拉到套餐"}</span>
+              </div>
+            </td>
+            <td>
+              <div class="schedule-box">
+                <label class="inline-row">
+                  <input type="checkbox" data-field="schedule-enabled" ${account.schedule_enabled ? "checked" : ""}>
+                  <span class="subtle">启用定时</span>
+                </label>
+                <input type="time" step="1" data-field="schedule-time" value="${esc(account.scheduled_start_time || "09:59:58")}">
+                <button class="mini-btn" type="button" data-action="save-schedule">保存定时</button>
+              </div>
+            </td>
+            <td>
+              <div class="stack">
+                ${badge(String(account.account_status).toLowerCase() === "valid", account.account_status || "-", "ok")}
+                ${badge(String(account.account_status).toLowerCase() === "expired", account.account_status || "-", "bad")}
+                ${badge(String(account.account_status).toLowerCase() === "error", account.account_status || "-", "bad")}
+                ${badge(String(account.account_status).toLowerCase() === "unchecked", account.account_status || "-", "warn")}
+                ${badge(String(scheduleStatus).toLowerCase() === "success", scheduleStatus || "-", "ok")}
+                ${badge(String(scheduleStatus).toLowerCase() === "failed", scheduleStatus || "-", "bad")}
+                ${badge(String(scheduleStatus).toLowerCase() === "running", scheduleStatus || "-", "warn")}
+                <span class="subtle">${esc(account.account_status_message || "未检查账号状态")}</span>
+                <span class="subtle">${esc(account.account_checked_at || "-")}</span>
+                <span class="subtle">${esc(account.last_schedule_message || "未执行定时任务")}</span>
+                <span class="subtle">${esc(account.last_scheduled_run_at || account.last_bootstrap_at || "-")}</span>
+              </div>
+            </td>
+            <td>${qrHtml}</td>
+            <td>
+              <div class="tiny-actions">
+                <button class="mini-btn primary" type="button" data-action="run-now">立即启动</button>
+                <button class="mini-btn" type="button" data-action="sync-account">同步并换指纹</button>
+                <button class="mini-btn" type="button" data-action="delete-account">删除账号</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    async function handleImportAccount() {
+      const label = byId("import-label").value.trim();
+      const token = byId("import-token").value.trim();
+      if (!label || !token) {
+        setStatus("账号备注和 Token 都得填，别整半拉子输入。", "bad");
+        return;
+      }
+      try {
+        const account = await api("/api/accounts/import", {
+          method: "POST",
+          body: JSON.stringify({
+            label,
+            token,
+            invitation_code: DEFAULT_INVITATION_CODE
+          })
+        });
+        await api(`/api/accounts/${encodeURIComponent(account.id)}/bootstrap`, { method: "POST" });
+        toggleModal("import-modal", false);
+        byId("import-form").reset();
+        setStatus(`账号 ${account.label} 已导入并同步完成。`, "ok");
+        await refreshDashboard();
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    async function handleTableClick(event) {
+      const action = event.target.closest("[data-action]")?.dataset.action;
+      const row = event.target.closest("tr[data-account-id]");
+      if (!action || !row) return;
+      const accountId = row.dataset.accountId;
+
+      try {
+        if (action === "open-context") {
+          openContext(accountId);
+          return;
+        }
+        if (action === "run-now") {
+          setStatus("正在启动支付链路，请稍候...", "warn");
+          await api(`/api/accounts/${encodeURIComponent(accountId)}/run`, { method: "POST" });
+          setStatus("支付二维码已更新。", "ok");
+          await refreshDashboard();
+          return;
+        }
+        if (action === "sync-account") {
+          setStatus("正在同步账号、刷新指纹并重新拉套餐...", "warn");
+          await api(`/api/accounts/${encodeURIComponent(accountId)}/bootstrap?refresh_fingerprint=true`, { method: "POST" });
+          setStatus("同步完成，已切换到新指纹。", "ok");
+          await refreshDashboard();
+          return;
+        }
+        if (action === "delete-account") {
+          if (!window.confirm("确认删除这个账号吗？本地缓存、会话和二维码任务都会清掉。")) return;
+          await api(`/api/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" });
+          setStatus("账号已删除。", "ok");
+          await refreshDashboard();
+          return;
+        }
+        if (action === "save-schedule") {
+          const enabled = row.querySelector('[data-field="schedule-enabled"]').checked;
+          const time = row.querySelector('[data-field="schedule-time"]').value;
+          await api(`/api/accounts/${encodeURIComponent(accountId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              schedule_enabled: enabled,
+              scheduled_start_time: time
+            })
+          });
+          setStatus("定时设置已保存。", "ok");
+          await refreshDashboard();
+        }
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    async function handleTableChange(event) {
+      const action = event.target.dataset.action;
+      const row = event.target.closest("tr[data-account-id]");
+      if (!row || action !== "select-product") return;
+      const accountId = row.dataset.accountId;
+      try {
+        await api(`/api/accounts/${encodeURIComponent(accountId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            selected_product_id: event.target.value
+          })
+        });
+        setStatus("套餐选择已保存。", "ok");
+        await refreshDashboard();
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    function openContext(accountId) {
+      const detail = state.details.get(accountId);
+      if (!detail) {
+        setStatus("没找到这个账号的上下文。", "bad");
+        return;
+      }
+      const account = detail.account || {};
+      const session = detail.session || {};
+      byId("context-title").textContent = account.label || "账号上下文";
+      byId("context-subtitle").textContent = `${account.id || "-"} ｜ ${account.browser_impersonate || "-"} ｜ ${session.purchase_mode || "-"}`;
+      byId("context-grid").innerHTML = [
+        contextMeta("Customer", session.customer_number || "-"),
+        contextMeta("Name", session.customer_name || "-"),
+        contextMeta("Invite", account.invitation_code || DEFAULT_INVITATION_CODE || "-"),
+        contextMeta("账号状态", account.account_status || "-"),
+        contextMeta("状态说明", account.account_status_message || "-"),
+        contextMeta("Schedule", account.schedule_enabled ? `${account.scheduled_start_time || "-"}` : "未启用"),
+        contextMeta("最近检查", account.account_checked_at || "-"),
+      ].join("");
+      byId("context-json").value = JSON.stringify({
+        account,
+        session: {
+          ...session,
+          captcha_challenge_raw: undefined,
+          captcha_challenge_ocr: undefined
+        }
+      }, null, 2);
+      toggleModal("context-modal", true);
+    }
+
+    function startPolling() {
+      stopPolling();
+      state.pollTimer = window.setInterval(() => refreshDashboard().catch(() => {}), 30000);
+    }
+
+    function stopPolling() {
+      if (state.pollTimer) {
+        window.clearInterval(state.pollTimer);
+        state.pollTimer = null;
+      }
+    }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.headers || {})
+        }
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.ok) {
+        const message = payload?.error?.message || `HTTP ${response.status}`;
+        const error = new Error(message);
+        error.details = payload?.error?.details;
+        throw error;
+      }
+      return payload.data;
+    }
+
+    function toggleModal(id, open) {
+      const modal = byId(id);
+      if (!modal) return;
+      modal.classList.toggle("show", open);
+      modal.setAttribute("aria-hidden", open ? "false" : "true");
+    }
+
+    function setStatus(message, type = "ok") {
+      const bar = byId("status-bar");
+      bar.textContent = message;
+      bar.className = `status show ${type}`;
+      window.clearTimeout(setStatus.timer);
+      setStatus.timer = window.setTimeout(() => {
+        bar.className = "status";
+      }, 4200);
+    }
+
+    function showError(error) {
+      console.error(error);
+      const detail = error?.details ? ` ｜ ${JSON.stringify(error.details)}` : "";
+      setStatus(`${error.message || "操作失败"}${detail}`, "bad");
+    }
+
+    function contextMeta(label, value) {
+      return `<div class="context-card"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
+    }
+
+    function badge(active, label, kind) {
+      return active ? `<span class="pill ${kind}">${esc(label)}</span>` : "";
+    }
+
+    function byId(id) {
+      return document.getElementById(id);
+    }
+
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      })[char]);
+    }
+  </script>
+</body>
+</html>

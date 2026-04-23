@@ -1,0 +1,17 @@
+.venv/
+.env
+.claude/
+.codex/
+.codex_tmp/
+
+__pycache__/
+*.py[cod]
+*.pyd
+
+data/accounts.json
+data/logs/
+data/sessions/*.json
+data/tdc_cache/
+
+node_modules/
+
