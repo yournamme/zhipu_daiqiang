@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import shutil
+import logging
 from datetime import datetime, timezone
 from functools import lru_cache
 from http.cookies import SimpleCookie
@@ -22,11 +23,14 @@ from app.models import (
     PaymentTaskRecord,
     PublicAccountRecord,
 )
+from app.runtime_logging import get_runtime_log_service
 from app.storage.json_store import JsonFileStore
 
 TOKEN_COOKIE_KEY = "bigmodel_token_production"
 DEFAULT_INVITATION_CODE = "XOJGYOGNLN"
 DEFAULT_SCHEDULED_START_TIME = "09:59:58"
+
+logger = logging.getLogger(__name__)
 
 
 class AccountStateService:
@@ -133,6 +137,20 @@ class AccountStateService:
         session.project_id = account.project_id or session.project_id
         session.updated_at = now
         self.save_session(session)
+        get_runtime_log_service().log_account_event(
+            account_id=account.id,
+            action="account_import",
+            stage="account",
+            status="success",
+            message="账号导入成功",
+            details={
+                "label": account.label,
+                "browser_impersonate": account.browser_impersonate,
+                "has_cookie_header": bool(account.cookie_header),
+                "schedule_enabled": account.schedule_enabled,
+                "scheduled_start_time": account.scheduled_start_time,
+            },
+        )
         return self.to_public_account(account)
 
     def update_account(self, account: AccountRecord) -> AccountRecord:
@@ -224,10 +242,12 @@ class AccountStateService:
             session = self.load_session(account.id)
             session.last_sign = ""
             session.last_order_id = ""
+            session.preview = None
             self.save_session(session)
+        logger.info("payment cache cleared on startup")
 
     def delete_account(self, account_id: str) -> None:
-        self.get_account(account_id)
+        account = self.get_account(account_id)
 
         def update_accounts(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             return [item for item in records if item.get("id") != account_id]
@@ -241,6 +261,14 @@ class AccountStateService:
         if session_path.exists():
             session_path.unlink()
         self._remove_account_artifacts(account_id)
+        get_runtime_log_service().log_account_event(
+            account_id=account_id,
+            action="account_delete",
+            stage="account",
+            status="success",
+            message="账号及本地缓存已删除",
+            details={"label": account.label},
+        )
 
     def get_task_by_biz_id(self, account_id: str, biz_id: str) -> PaymentTaskRecord | None:
         for task in self.list_tasks(account_id):

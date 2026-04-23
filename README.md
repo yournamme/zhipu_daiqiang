@@ -241,6 +241,7 @@ data/
   tasks.json
   sessions/
   logs/
+    runtime/
   tdc_cache/
 ```
 
@@ -250,7 +251,68 @@ data/
 - `tasks.json`：最新二维码任务
 - `sessions/`：账号上下文缓存
 - `logs/`：运行日志
+- `logs/runtime/`：正式运行日志
 - `tdc_cache/`：腾讯 TDC 脚本缓存
+
+## 正式运行日志
+
+项目现在已经补了正式运行日志，不再只是控制台里飘几行 `INFO`。
+
+日志目录：
+
+```text
+data/logs/runtime/
+  app.log
+  events-YYYY-MM-DD.jsonl
+  accounts/
+    {account_id}/
+      YYYY-MM-DD.jsonl
+```
+
+说明：
+
+- `app.log`：标准文本日志，适合直接翻看服务启动、异常栈、调度器运行情况
+- `events-YYYY-MM-DD.jsonl`：当天全量结构化流水，适合排查整站任务
+- `accounts/{account_id}/YYYY-MM-DD.jsonl`：单账号结构化流水，适合盯一个账号复盘
+
+结构化日志核心字段：
+
+- `timestamp`：事件时间
+- `account_id`：账号 ID
+- `run_id`：单次运行链路 ID，同一条链路会贯穿 `captcha -> preview -> sign`
+- `action`：动作名称，比如 `run_payment_flow`、`bootstrap_account`
+- `stage`：步骤名称，比如 `batch_preview`、`captcha_verify`、`preview`、`sign`
+- `status`：步骤状态，比如 `started`、`success`、`retry`、`failed`、`paused`
+- `details`：补充字段，包含 OCR 点位数、置信度、`bizId`、签单轮次等
+
+当前正式日志会覆盖这些关键链路：
+
+- 服务启动 / 停止
+- OCR 预热
+- 调度器启动、轮询异常、启动检查
+- 账号导入、删除、同步并换指纹
+- `getCustomerInfo`
+- `/biz/pay/batch-preview`
+- 验证码获取
+- OCR 点位门禁判断
+- 腾讯 `verify`
+- `preview`
+- `create-sign` / `update-sign`
+- 二维码生成
+- 支付状态检查
+- 暂停、失败、重试
+
+敏感字段处理：
+
+- `token`
+- `cookie`
+- `ticket`
+- `randstr`
+- `sign`
+- `collect / eks`
+- base64 图片 / 二维码
+
+这些字段进入结构化日志时会自动脱敏，不会原样落盘。
 
 ## 重启行为
 
@@ -258,6 +320,12 @@ data/
 
 1. 清空旧二维码缓存
 2. 异步检查本地缓存账号是否有效
+
+另外：
+
+- 已生成的旧二维码不会跨重启保留
+- 正式日志不会清空，会持续按天累积
+- 日志保留天数默认 `7` 天，可通过 `RUNTIME_LOG_RETENTION_DAYS` 调整
 
 这意味着：
 

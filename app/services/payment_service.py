@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from io import BytesIO
@@ -28,6 +29,7 @@ from app.models import (
     PreviewSeedRequest,
     ProductOffer,
 )
+from app.runtime_logging import FlowRun, RuntimeLogService, get_runtime_log_service
 from app.services.account_state import (
     AccountStateService,
     get_account_state_service,
@@ -62,6 +64,11 @@ STATIC_PRODUCTS: tuple[StaticProduct, ...] = (
 )
 
 DEFAULT_PRODUCT_ID = "product-5643e6"
+logger = logging.getLogger(__name__)
+
+
+class RunPausedError(Exception):
+    """Raised when an account flow is paused by the operator."""
 
 
 class PaymentService:
@@ -76,6 +83,7 @@ class PaymentService:
         tencent_captcha_client: TencentCaptchaClient | None = None,
         ocr_service: OcrService | None = None,
         tdc_service: TencentTdcService | None = None,
+        runtime_log_service: RuntimeLogService | None = None,
     ) -> None:
         self.state_service = state_service or get_account_state_service()
         self.captcha_service = captcha_service or get_captcha_service()
@@ -83,6 +91,7 @@ class PaymentService:
         self.tencent_captcha_client = tencent_captcha_client or get_tencent_captcha_client()
         self.ocr_service = ocr_service or get_ocr_service()
         self.tdc_service = tdc_service or get_tdc_service()
+        self.runtime_logs = runtime_log_service or get_runtime_log_service()
 
     def health_payload(self) -> dict[str, Any]:
         return {
@@ -108,41 +117,88 @@ class PaymentService:
         self.state_service.delete_account(account_id)
         return {"account_id": account_id, "deleted": True}
 
-    def bootstrap_account(self, account_id: str, *, refresh_fingerprint: bool = False) -> AccountDetailResponse:
-        if refresh_fingerprint:
-            self.state_service.rotate_browser_impersonate(account_id)
-        account = self.state_service.get_account(account_id)
-        session = self.state_service.load_session(account_id)
+    def bootstrap_account(
+        self,
+        account_id: str,
+        *,
+        refresh_fingerprint: bool = False,
+        flow: FlowRun | None = None,
+    ) -> AccountDetailResponse:
+        own_flow = flow is None
+        if own_flow:
+            flow = self.runtime_logs.start_run(
+                account_id=account_id,
+                action="bootstrap_account",
+                source="refresh_fingerprint" if refresh_fingerprint else "manual",
+            )
+        try:
+            if refresh_fingerprint:
+                rotated = self.state_service.rotate_browser_impersonate(account_id)
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="fingerprint",
+                    status="rotated",
+                    message="账号指纹已刷新",
+                    details={"browser_impersonate": rotated.browser_impersonate},
+                )
+            account = self.state_service.get_account(account_id)
+            session = self.state_service.load_session(account_id)
 
-        user_info_result = self.bigmodel_client.get_customer_info(account, session)
-        user_info = self._ensure_dict(user_info_result.data, label="getCustomerInfo.data")
-        organizations = self._extract_organizations(user_info)
-        org_id, project_id = self._choose_org_and_project(
-            organizations=organizations,
-            preferred_org_id=account.org_id or session.org_id,
-            preferred_project_id=account.project_id or session.project_id,
-        )
-
-        session.org_id = org_id
-        session.project_id = project_id
-        session.customer_number = str(user_info.get("customerNumber") or "")
-        session.customer_name = str(user_info.get("customerName") or "")
-        session.user_info = user_info
-        session.organizations = organizations
-
-        if not session.customer_number:
-            raise UpstreamRequestError(
-                "getCustomerInfo 没返回 customerNumber，后面 create-sign 根本没法拼。",
-                details={"payload": user_info_result.raw},
+            self.runtime_logs.log_event(
+                flow,
+                stage="get_customer_info",
+                status="started",
+                message="开始同步账号上下文",
+                details={"browser_impersonate": account.browser_impersonate},
+            )
+            user_info_result = self.bigmodel_client.get_customer_info(account, session)
+            user_info = self._ensure_dict(user_info_result.data, label="getCustomerInfo.data")
+            organizations = self._extract_organizations(user_info)
+            org_id, project_id = self._choose_org_and_project(
+                organizations=organizations,
+                preferred_org_id=account.org_id or session.org_id,
+                preferred_project_id=account.project_id or session.project_id,
             )
 
-        account.org_id = org_id
-        account.project_id = project_id
-        account.last_bootstrap_at = utc_now_iso()
-        self.state_service.update_account(account)
+            session.org_id = org_id
+            session.project_id = project_id
+            session.customer_number = str(user_info.get("customerNumber") or "")
+            session.customer_name = str(user_info.get("customerName") or "")
+            session.user_info = user_info
+            session.organizations = organizations
 
-        try:
-            products = self.load_products(account_id, invitation_code=account.invitation_code, account=account, session=session)
+            if not session.customer_number:
+                raise UpstreamRequestError(
+                    "getCustomerInfo 没返回 customerNumber，后面 create-sign 根本没法拼。",
+                    details={"payload": user_info_result.raw},
+                )
+
+            self.runtime_logs.log_event(
+                flow,
+                stage="get_customer_info",
+                status="success",
+                message="账号上下文同步成功",
+                details={
+                    "customer_number": session.customer_number,
+                    "customer_name": session.customer_name,
+                    "org_id": org_id,
+                    "project_id": project_id,
+                    "organization_count": len(organizations),
+                },
+            )
+
+            account.org_id = org_id
+            account.project_id = project_id
+            account.last_bootstrap_at = utc_now_iso()
+            self.state_service.update_account(account)
+
+            products = self.load_products(
+                account_id,
+                invitation_code=account.invitation_code,
+                account=account,
+                session=session,
+                flow=flow,
+            )
             session.products = products
             if not session.selected_product_id:
                 session.selected_product_id = DEFAULT_PRODUCT_ID
@@ -152,13 +208,33 @@ class PaymentService:
             account.account_status_message = "同步上下文和套餐成功"
             account.account_checked_at = utc_now_iso()
             self.state_service.update_account(account)
-            return self.state_service.get_account_detail(account_id)
+            detail = self.state_service.get_account_detail(account_id)
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="success",
+                    message="账号同步完成",
+                    details={
+                        "product_count": len(products),
+                        "selected_product_id": detail.session.selected_product_id,
+                        "purchase_mode": detail.session.purchase_mode,
+                    },
+                )
+            return detail
         except Exception as exc:
             account = self.state_service.get_account(account_id)
             account.account_status = "error"
             account.account_status_message = str(exc)
             account.account_checked_at = utc_now_iso()
             self.state_service.update_account(account)
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="failed",
+                    message=f"账号同步失败：{exc}",
+                    details={"error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
             raise
 
     def load_products(
@@ -168,60 +244,146 @@ class PaymentService:
         invitation_code: str | None = None,
         account: AccountRecord | None = None,
         session: AccountSessionState | None = None,
+        flow: FlowRun | None = None,
     ) -> list[ProductOffer]:
+        own_flow = flow is None
+        if own_flow:
+            flow = self.runtime_logs.start_run(
+                account_id=account_id,
+                action="load_products",
+                source="manual",
+            )
         account = account or self.state_service.get_account(account_id)
         session = session or self.state_service.load_session(account_id)
-        if not session.customer_number:
-            detail = self.bootstrap_account(account_id)
-            return detail.session.products
+        try:
+            if not session.customer_number:
+                detail = self.bootstrap_account(account_id, flow=flow)
+                return detail.session.products
 
-        invitation = invitation_code if invitation_code is not None else account.invitation_code
-        result = self.bigmodel_client.batch_preview(account, session, invitation or "")
-        payload = self._ensure_dict(result.data, label="batchPreview.data")
-        session.is_subscribed = bool(payload.get("isSubscribed"))
-        session.purchase_mode = "upgrade" if session.is_subscribed else "new_purchase"
-        products = self._merge_products(payload, purchase_mode=session.purchase_mode)
-        session.products = products
-        if not session.selected_product_id:
-            session.selected_product_id = DEFAULT_PRODUCT_ID
-        self.state_service.save_session(session)
-        return products
+            invitation = invitation_code if invitation_code is not None else account.invitation_code
+            self.runtime_logs.log_event(
+                flow,
+                stage="batch_preview",
+                status="started",
+                message="开始同步套餐列表",
+                details={"invitation_code": invitation, "customer_number": session.customer_number},
+            )
+            result = self.bigmodel_client.batch_preview(account, session, invitation or "")
+            payload = self._ensure_dict(result.data, label="batchPreview.data")
+            session.is_subscribed = bool(payload.get("isSubscribed"))
+            session.purchase_mode = "upgrade" if session.is_subscribed else "new_purchase"
+            products = self._merge_products(payload, purchase_mode=session.purchase_mode)
+            session.products = products
+            if not session.selected_product_id:
+                session.selected_product_id = DEFAULT_PRODUCT_ID
+            self.state_service.save_session(session)
+            self.runtime_logs.log_event(
+                flow,
+                stage="batch_preview",
+                status="success",
+                message="套餐列表同步成功",
+                details={
+                    "purchase_mode": session.purchase_mode,
+                    "is_subscribed": session.is_subscribed,
+                    "product_count": len(products),
+                    "selected_product_id": session.selected_product_id,
+                },
+            )
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="success",
+                    message="套餐列表同步完成",
+                    details={"product_count": len(products), "purchase_mode": session.purchase_mode},
+                )
+            return products
+        except Exception as exc:
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="failed",
+                    message=f"套餐列表同步失败：{exc}",
+                    details={"error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
+            raise
 
     def save_manual_captcha(self, account_id: str, request: ManualCaptchaRequest) -> AccountSessionState:
         session = self.state_service.load_session(account_id)
         session = self.captcha_service.store_manual_ticket(session, request)
         return self.state_service.save_session(session)
 
-    def fetch_captcha_challenge(self, account_id: str, *, analyze: bool = True) -> dict[str, Any]:
-        account = self.state_service.get_account(account_id)
-        challenge = self.tencent_captcha_client.prehandle(account)
-        image_bytes = self.tencent_captcha_client.fetch_image_bytes(account, challenge)
-        payload: dict[str, Any] = {
-            "instruction": challenge.instruction,
-            "sess": challenge.sess,
-            "sid": challenge.sid,
-            "image_url": challenge.image_url,
-            "image_path": challenge.image_path,
-            "image_size": len(image_bytes),
-            "image_base64": "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii"),
-            "raw": challenge.raw,
-        }
-        if analyze:
-            payload["ocr"] = self.ocr_service.analyze_captcha_image(
-                image_bytes,
-                prompt_text=challenge.instruction,
+    def fetch_captcha_challenge(
+        self,
+        account_id: str,
+        *,
+        analyze: bool = True,
+        flow: FlowRun | None = None,
+    ) -> dict[str, Any]:
+        own_flow = flow is None
+        if own_flow:
+            flow = self.runtime_logs.start_run(account_id=account_id, action="fetch_captcha_challenge")
+        try:
+            account = self.state_service.get_account(account_id)
+            challenge = self.tencent_captcha_client.prehandle(account)
+            image_bytes = self.tencent_captcha_client.fetch_image_bytes(account, challenge)
+            payload: dict[str, Any] = {
+                "instruction": challenge.instruction,
+                "sess": challenge.sess,
+                "sid": challenge.sid,
+                "image_url": challenge.image_url,
+                "image_path": challenge.image_path,
+                "image_size": len(image_bytes),
+                "image_base64": "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii"),
+                "raw": challenge.raw,
+            }
+            if analyze:
+                payload["ocr"] = self.ocr_service.analyze_captcha_image(
+                    image_bytes,
+                    prompt_text=challenge.instruction,
+                )
+            session = self.state_service.load_session(account_id)
+            self.captcha_service.store_challenge_snapshot(
+                session,
+                sess=challenge.sess,
+                sid=challenge.sid,
+                instruction=challenge.instruction,
+                raw=challenge.raw,
+                ocr=payload.get("ocr") if isinstance(payload.get("ocr"), dict) else None,
             )
-        session = self.state_service.load_session(account_id)
-        self.captcha_service.store_challenge_snapshot(
-            session,
-            sess=challenge.sess,
-            sid=challenge.sid,
-            instruction=challenge.instruction,
-            raw=challenge.raw,
-            ocr=payload.get("ocr") if isinstance(payload.get("ocr"), dict) else None,
-        )
-        self.state_service.save_session(session)
-        return payload
+            self.state_service.save_session(session)
+            ocr = payload.get("ocr") if isinstance(payload.get("ocr"), dict) else {}
+            self.runtime_logs.log_event(
+                flow,
+                stage="captcha_challenge",
+                status="success",
+                message="验证码图片获取成功",
+                details={
+                    "instruction": challenge.instruction,
+                    "image_size": len(image_bytes),
+                    "ocr_points": len(ocr.get("points") or []) if isinstance(ocr.get("points"), list) else 0,
+                    "ocr_confidence": ocr.get("confidence"),
+                    "worker_pid": ocr.get("_worker_pid"),
+                    "worker_elapsed_ms": ocr.get("_worker_elapsed_ms"),
+                },
+            )
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="success",
+                    message="验证码获取完成",
+                )
+            return payload
+        except Exception as exc:
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="failed",
+                    message=f"验证码获取失败：{exc}",
+                    details={"error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
+            raise
 
     def build_captcha_verify_payload(
         self,
@@ -247,117 +409,231 @@ class PaymentService:
         self,
         account_id: str,
         request: CaptchaVerifyPayloadRequest,
+        *,
+        flow: FlowRun | None = None,
     ) -> dict[str, Any]:
-        account = self.state_service.get_account(account_id)
-        session = self.state_service.load_session(account_id)
-        request, tdc_result = self._hydrate_tdc_if_needed(account, session, request)
-        bundle = self.captcha_service.build_verify_payload(session, request)
-        bundle["challenge"] = {
-            "sess": session.captcha_challenge_sess,
-            "sid": session.captcha_challenge_sid,
-            "instruction": session.captcha_challenge_instruction,
-            "updated_at": session.captcha_challenge_updated_at,
-        }
-        if tdc_result:
-            bundle["tdc"] = tdc_result
-        self._attach_pow_if_needed(session, request, bundle)
-        verify_result = self.tencent_captcha_client.verify(account, bundle["payload"])
+        own_flow = flow is None
+        if own_flow:
+            flow = self.runtime_logs.start_run(account_id=account_id, action="captcha_verify")
+        try:
+            account = self.state_service.get_account(account_id)
+            session = self.state_service.load_session(account_id)
+            request, tdc_result = self._hydrate_tdc_if_needed(account, session, request)
+            bundle = self.captcha_service.build_verify_payload(session, request)
+            bundle["challenge"] = {
+                "sess": session.captcha_challenge_sess,
+                "sid": session.captcha_challenge_sid,
+                "instruction": session.captcha_challenge_instruction,
+                "updated_at": session.captcha_challenge_updated_at,
+            }
+            if tdc_result:
+                bundle["tdc"] = tdc_result
+            self._attach_pow_if_needed(session, request, bundle)
+            verify_result = self.tencent_captcha_client.verify(account, bundle["payload"])
 
-        if verify_result.sess:
-            session.captcha_challenge_sess = verify_result.sess
-        if verify_result.ticket and verify_result.randstr:
-            session.captcha_ticket = verify_result.ticket
-            session.captcha_randstr = verify_result.randstr
-            session.captcha_updated_at = utc_now_iso()
-        else:
-            session.captcha_ticket = ""
-            session.captcha_randstr = ""
-            session.captcha_updated_at = None
-        self.state_service.save_session(session)
+            if verify_result.sess:
+                session.captcha_challenge_sess = verify_result.sess
+            if verify_result.ticket and verify_result.randstr:
+                session.captcha_ticket = verify_result.ticket
+                session.captcha_randstr = verify_result.randstr
+                session.captcha_updated_at = utc_now_iso()
+            else:
+                session.captcha_ticket = ""
+                session.captcha_randstr = ""
+                session.captcha_updated_at = None
+            self.state_service.save_session(session)
 
-        return {
-            "request": bundle,
-            "response": verify_result.raw,
-            "ticket": verify_result.ticket,
-            "randstr": verify_result.randstr,
-            "ret": verify_result.ret,
-            "error_code": verify_result.error_code,
-            "error_message": verify_result.error_message,
-        }
+            response = {
+                "request": bundle,
+                "response": verify_result.raw,
+                "ticket": verify_result.ticket,
+                "randstr": verify_result.randstr,
+                "ret": verify_result.ret,
+                "error_code": verify_result.error_code,
+                "error_message": verify_result.error_message,
+            }
+            verify_ok = bool(verify_result.ticket and verify_result.randstr and str(verify_result.error_code or "0") in {"", "0"})
+            self.runtime_logs.log_event(
+                flow,
+                stage="captcha_verify",
+                status="success" if verify_ok else "failed",
+                message="验证码 verify 完成" if verify_ok else "验证码 verify 未通过",
+                details={
+                    "ret": verify_result.ret,
+                    "error_code": verify_result.error_code,
+                    "error_message": verify_result.error_message,
+                    "ticket_ready": bool(verify_result.ticket),
+                    "randstr_ready": bool(verify_result.randstr),
+                },
+                level=logging.INFO if verify_ok else logging.WARNING,
+            )
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="success" if verify_ok else "failed",
+                    message="验证码 verify 结束",
+                    details={"error_code": verify_result.error_code},
+                    level=logging.INFO if verify_ok else logging.WARNING,
+                )
+            return response
+        except Exception as exc:
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="failed",
+                    message=f"验证码 verify 失败：{exc}",
+                    details={"error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
+            raise
 
-    def solve_captcha(self, account_id: str) -> dict[str, Any]:
+    def solve_captcha(self, account_id: str, *, flow: FlowRun | None = None) -> dict[str, Any]:
+        own_flow = flow is None
+        if own_flow:
+            flow = self.runtime_logs.start_run(account_id=account_id, action="solve_captcha")
         attempts: list[dict[str, Any]] = []
         last_result: dict[str, Any] = {}
         attempt = 0
-        while True:
-            attempt += 1
-            try:
-                challenge = self.fetch_captcha_challenge(account_id, analyze=True)
-            except GlmDeskError as exc:
-                result = {
-                    "attempt": attempt,
-                    "challenge": None,
-                    "verify": {
-                        "skipped": True,
-                        "error_code": "OCR_EXCEPTION",
-                        "error_message": exc.message,
-                        "details": exc.details,
-                    },
-                    "ticket": "",
-                    "randstr": "",
-                    "status": "ocr_exception",
-                }
-                attempts.append(result)
-                last_result = result
-                continue
-            ocr_gate = self._captcha_ocr_gate(challenge)
-            if not ocr_gate["usable"]:
+        try:
+            while True:
+                self._ensure_not_paused(account_id)
+                attempt += 1
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="captcha_attempt",
+                    status="started",
+                    message=f"开始第 {attempt} 轮验证码识别",
+                    details={"attempt": attempt},
+                )
+                try:
+                    challenge = self.fetch_captcha_challenge(account_id, analyze=True, flow=flow)
+                except GlmDeskError as exc:
+                    result = {
+                        "attempt": attempt,
+                        "challenge": None,
+                        "verify": {
+                            "skipped": True,
+                            "error_code": "OCR_EXCEPTION",
+                            "error_message": exc.message,
+                            "details": exc.details,
+                        },
+                        "ticket": "",
+                        "randstr": "",
+                        "status": "ocr_exception",
+                    }
+                    attempts.append(result)
+                    last_result = result
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="captcha_attempt",
+                        status="retry",
+                        message="OCR 识别异常，刷新验证码重试",
+                        details={"attempt": attempt, "error": exc.message, "details": exc.details},
+                        level=logging.WARNING,
+                    )
+                    continue
+                ocr_gate = self._captcha_ocr_gate(challenge)
+                if not ocr_gate["usable"]:
+                    result = {
+                        "attempt": attempt,
+                        "challenge": challenge,
+                        "verify": {
+                            "skipped": True,
+                            "error_code": "OCR_INCOMPLETE",
+                            "error_message": "OCR 点位少于 3 个或置信度不达标，跳过 verify 并刷新重试。",
+                            "ocr_gate": ocr_gate,
+                        },
+                        "ticket": "",
+                        "randstr": "",
+                        "status": "ocr_rejected",
+                    }
+                    attempts.append(result)
+                    last_result = result
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="ocr_gate",
+                        status="retry",
+                        message="OCR 点位未达标，刷新验证码重试",
+                        details={"attempt": attempt, **ocr_gate},
+                        level=logging.WARNING,
+                    )
+                    continue
+
+                verify = self.submit_captcha_verify(account_id, CaptchaVerifyPayloadRequest(), flow=flow)
+                error_code = str(verify.get("error_code") or "")
                 result = {
                     "attempt": attempt,
                     "challenge": challenge,
-                    "verify": {
-                        "skipped": True,
-                        "error_code": "OCR_INCOMPLETE",
-                        "error_message": "OCR 点位少于 3 个或置信度不达标，跳过 verify 并刷新重试。",
-                        "ocr_gate": ocr_gate,
-                    },
-                    "ticket": "",
-                    "randstr": "",
-                    "status": "ocr_rejected",
+                    "verify": verify,
+                    "ticket": verify.get("ticket") or "",
+                    "randstr": verify.get("randstr") or "",
+                    "status": "verified" if not error_code or error_code == "0" else "verify_failed",
                 }
+                if error_code == "50":
+                    result["ticket"] = ""
+                    result["randstr"] = ""
+                    result["status"] = "recognition_failed"
+                    attempts.append(result)
+                    last_result = result
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="captcha_verify",
+                        status="retry",
+                        message="验证码 verify 返回 error=50，直接刷新重试",
+                        details={"attempt": attempt, "error_code": error_code},
+                        level=logging.WARNING,
+                    )
+                    continue
+                if (error_code and error_code != "0") or not result["ticket"] or not result["randstr"]:
+                    result["ticket"] = ""
+                    result["randstr"] = ""
+                    attempts.append(result)
+                    last_result = result
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="captcha_verify",
+                        status="retry",
+                        message="验证码 verify 未通过，刷新重试",
+                        details={
+                            "attempt": attempt,
+                            "error_code": error_code,
+                            "ticket_ready": bool(verify.get("ticket")),
+                            "randstr_ready": bool(verify.get("randstr")),
+                        },
+                        level=logging.WARNING,
+                    )
+                    continue
                 attempts.append(result)
                 last_result = result
-                continue
-
-            verify = self.submit_captcha_verify(account_id, CaptchaVerifyPayloadRequest())
-            error_code = str(verify.get("error_code") or "")
-            result = {
-                "attempt": attempt,
-                "challenge": challenge,
-                "verify": verify,
-                "ticket": verify.get("ticket") or "",
-                "randstr": verify.get("randstr") or "",
-                "status": "verified" if not error_code or error_code == "0" else "verify_failed",
-            }
-            if error_code == "50":
-                result["ticket"] = ""
-                result["randstr"] = ""
-                result["status"] = "recognition_failed"
-                attempts.append(result)
-                last_result = result
-                continue
-            if (error_code and error_code != "0") or not result["ticket"] or not result["randstr"]:
-                result["ticket"] = ""
-                result["randstr"] = ""
-                attempts.append(result)
-                last_result = result
-                continue
-            attempts.append(result)
-            last_result = result
-            return {
-                **result,
-                "attempts": attempts,
-            }
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="captcha_attempt",
+                    status="success",
+                    message="验证码识别成功",
+                    details={"attempt": attempt, "ticket_ready": True, "randstr_ready": True},
+                )
+                solved = {
+                    **result,
+                    "attempts": attempts,
+                }
+                if own_flow:
+                    self.runtime_logs.finish_run(
+                        flow,
+                        status="success",
+                        message=f"验证码识别成功，共尝试 {attempt} 轮",
+                        details={"attempts": attempt},
+                    )
+                return solved
+        except Exception as exc:
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="failed",
+                    message=f"验证码识别失败：{exc}",
+                    details={"attempt": attempt, "last_status": last_result.get("status"), "error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
+            raise
 
     def collect_captcha_tdc(self, account_id: str) -> dict[str, Any]:
         account = self.state_service.get_account(account_id)
@@ -365,90 +641,158 @@ class PaymentService:
         result = self.tdc_service.collect_for_challenge(account, session.captcha_challenge_raw or {})
         return result.to_payload()
 
-    def preview_payment(self, account_id: str, request: PreviewPaymentRequest) -> PreviewResult:
-        account, session = self._ensure_context(account_id)
-        invitation = (request.invitation_code or account.invitation_code).strip()
-        preview_attempts: list[dict[str, Any]] = []
-        preview_round = 0
+    def preview_payment(
+        self,
+        account_id: str,
+        request: PreviewPaymentRequest,
+        *,
+        flow: FlowRun | None = None,
+    ) -> PreviewResult:
+        own_flow = flow is None
+        if own_flow:
+            flow = self.runtime_logs.start_run(
+                account_id=account_id,
+                action="preview_payment",
+                product_id=request.product_id,
+            )
+        try:
+            account, session = self._ensure_context(account_id)
+            invitation = (request.invitation_code or account.invitation_code).strip()
+            preview_attempts: list[dict[str, Any]] = []
+            preview_round = 0
 
-        while True:
-            preview_round += 1
-            # 1. Solve a fresh captcha chain each round after the first failed preview.
-            captcha_request = request if preview_round == 1 else request.model_copy(update={"ticket": None, "randstr": None})
-            ticket, randstr = self._resolve_or_solve_preview_captcha(account_id, session, captcha_request)
+            while True:
+                self._ensure_not_paused(account_id)
+                preview_round += 1
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="preview",
+                    status="started",
+                    message=f"开始第 {preview_round} 轮 preview",
+                    details={"round": preview_round, "product_id": request.product_id},
+                )
+                captcha_request = request if preview_round == 1 else request.model_copy(update={"ticket": None, "randstr": None})
+                ticket, randstr = self._resolve_or_solve_preview_captcha(account_id, session, captcha_request, flow=flow)
 
-            # 2. call preview API
-            try:
-                result = self.bigmodel_client.preview_payment(
-                    account,
-                    session,
-                    request,
-                    invitation_code=invitation,
-                    ticket=ticket,
-                    randstr=randstr,
-                )
-            except UpstreamRequestError as exc:
-                preview_attempts.append(
-                    {
-                        "round": preview_round,
-                        "code": None,
-                        "biz_id": None,
-                        "sold_out": None,
-                        "msg": exc.message,
-                        "ticket": ticket[:30] + "..." if ticket else "",
-                    }
-                )
+                try:
+                    result = self.bigmodel_client.preview_payment(
+                        account,
+                        session,
+                        request,
+                        invitation_code=invitation,
+                        ticket=ticket,
+                        randstr=randstr,
+                    )
+                except UpstreamRequestError as exc:
+                    preview_attempts.append(
+                        {
+                            "round": preview_round,
+                            "code": None,
+                            "biz_id": None,
+                            "sold_out": None,
+                            "msg": exc.message,
+                            "ticket": ticket[:12] + "***" if ticket else "",
+                        }
+                    )
+                    if len(preview_attempts) > 100:
+                        preview_attempts.pop(0)
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="preview",
+                        status="retry",
+                        message="preview 请求失败，重新开始整条链路",
+                        details={"round": preview_round, "error": exc.message, "details": exc.details},
+                        level=logging.WARNING,
+                    )
+                    session = self.state_service.load_session(account_id)
+                    continue
+                raw = result.raw
+                code = raw.get("code")
+                data = result.data if isinstance(result.data, dict) else {}
+
+                biz_id = str(data.get("bizId") or "").strip()
+                attempt_info = {
+                    "round": preview_round,
+                    "code": code,
+                    "biz_id": biz_id or None,
+                    "sold_out": bool(data.get("soldOut")),
+                    "msg": raw.get("msg") or "",
+                    "ticket": ticket[:12] + "***" if ticket else "",
+                }
+                preview_attempts.append(attempt_info)
                 if len(preview_attempts) > 100:
                     preview_attempts.pop(0)
+
+                preview = PreviewResult(
+                    biz_id=biz_id,
+                    third_party_amount=self._string_value(data, "thirdPartyAmount"),
+                    sold_out=bool(data.get("soldOut")),
+                    original_amount=self._string_value(data, "originalAmount"),
+                    pay_amount=self._string_value(data, "payAmount"),
+                    residual_amount=self._string_value(data, "residualAmount"),
+                    give_amount=self._string_value(data, "giveAmount"),
+                    cash_amount=self._string_value(data, "cashAmount"),
+                    renew_amount=self._string_value(data, "renewAmount"),
+                    campaign_discount_details=list(data.get("campaignDiscountDetails") or []),
+                    last_subscription_summary=self._ensure_dict(
+                        data.get("lastSubscriptionSummary") or {},
+                        label="preview.lastSubscriptionSummary",
+                    ),
+                    raw=raw,
+                )
+
+                if code == 200 and biz_id:
+                    session.selected_product_id = request.product_id
+                    session.preview = preview
+                    session.captcha_ticket = ticket
+                    session.captcha_randstr = randstr
+                    self.state_service.save_session(session)
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="preview",
+                        status="success",
+                        message="preview 成功拿到 bizId",
+                        details={
+                            "round": preview_round,
+                            "biz_id": biz_id,
+                            "sold_out": preview.sold_out,
+                            "third_party_amount": preview.third_party_amount,
+                        },
+                    )
+                    if own_flow:
+                        self.runtime_logs.finish_run(
+                            flow,
+                            status="success",
+                            message="preview 成功",
+                            details={"biz_id": biz_id, "round": preview_round},
+                        )
+                    return preview
+
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="preview",
+                    status="retry",
+                    message="preview 未拿到 bizId，重跑整条链路",
+                    details={
+                        "round": preview_round,
+                        "code": code,
+                        "biz_id": biz_id,
+                        "sold_out": bool(data.get("soldOut")),
+                        "msg": raw.get("msg") or "",
+                    },
+                    level=logging.WARNING,
+                )
                 session = self.state_service.load_session(account_id)
-                continue
-            raw = result.raw
-            code = raw.get("code")
-            data = result.data if isinstance(result.data, dict) else {}
-
-            biz_id = str(data.get("bizId") or "").strip()
-            attempt_info = {
-                "round": preview_round,
-                "code": code,
-                "biz_id": biz_id or None,
-                "sold_out": bool(data.get("soldOut")),
-                "msg": raw.get("msg") or "",
-                "ticket": ticket[:30] + "..." if ticket else "",
-            }
-            preview_attempts.append(attempt_info)
-            if len(preview_attempts) > 100:
-                preview_attempts.pop(0)
-
-            preview = PreviewResult(
-                biz_id=biz_id,
-                third_party_amount=self._string_value(data, "thirdPartyAmount"),
-                sold_out=bool(data.get("soldOut")),
-                original_amount=self._string_value(data, "originalAmount"),
-                pay_amount=self._string_value(data, "payAmount"),
-                residual_amount=self._string_value(data, "residualAmount"),
-                give_amount=self._string_value(data, "giveAmount"),
-                cash_amount=self._string_value(data, "cashAmount"),
-                renew_amount=self._string_value(data, "renewAmount"),
-                campaign_discount_details=list(data.get("campaignDiscountDetails") or []),
-                last_subscription_summary=self._ensure_dict(
-                    data.get("lastSubscriptionSummary") or {},
-                    label="preview.lastSubscriptionSummary",
-                ),
-                raw=raw,
-            )
-
-            # 3. Only a successful business id can move the flow forward.
-            if code == 200 and biz_id:
-                session.selected_product_id = request.product_id
-                session.preview = preview
-                session.captcha_ticket = ticket
-                session.captcha_randstr = randstr
-                self.state_service.save_session(session)
-                return preview
-
-            # 4. code=200 with bizId=null, captcha errors, or other failures restart the full chain.
-            session = self.state_service.load_session(account_id)
-            # reload session to get fresh state
+        except Exception as exc:
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="failed",
+                    message=f"preview 失败：{exc}",
+                    details={"error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
+            raise
 
     def seed_preview(self, account_id: str, request: PreviewSeedRequest) -> PreviewResult:
         session = self.state_service.load_session(account_id)
@@ -460,130 +804,216 @@ class PaymentService:
         self.state_service.save_session(session)
         return preview
 
-    def create_qr(self, account_id: str, request: CreateQrRequest) -> PaymentTaskRecord:
-        account, session = self._ensure_context(account_id)
-        product_id = request.product_id.strip() or session.selected_product_id
-        if not product_id:
-            raise BadRequestError("缺少 product_id，二维码没法生成")
-        invitation = (request.invitation_code or account.invitation_code).strip()
-        if not session.preview or not session.preview.biz_id:
-            raise BadRequestError("请先调用 preview，拿到 bizId 之后再生成二维码")
-        qr_cycles: list[dict[str, Any]] = []
-        cycle = 0
-
-        while True:
-            cycle += 1
-            session = self.state_service.load_session(account_id)
+    def create_qr(
+        self,
+        account_id: str,
+        request: CreateQrRequest,
+        *,
+        flow: FlowRun | None = None,
+    ) -> PaymentTaskRecord:
+        own_flow = flow is None
+        if own_flow:
+            flow = self.runtime_logs.start_run(
+                account_id=account_id,
+                action="create_qr",
+                product_id=request.product_id,
+                pay_type=request.pay_type,
+            )
+        try:
+            account, session = self._ensure_context(account_id)
+            product_id = request.product_id.strip() or session.selected_product_id
+            if not product_id:
+                raise BadRequestError("缺少 product_id，二维码没法生成")
+            invitation = (request.invitation_code or account.invitation_code).strip()
             if not session.preview or not session.preview.biz_id:
-                regenerated_preview = self.preview_payment(
-                    account_id,
-                    PreviewPaymentRequest(
-                        product_id=product_id,
-                        invitation_code=invitation,
-                    ),
-                )
+                raise BadRequestError("请先调用 preview，拿到 bizId 之后再生成二维码")
+            qr_cycles: list[dict[str, Any]] = []
+            cycle = 0
+
+            while True:
+                self._ensure_not_paused(account_id)
+                cycle += 1
                 session = self.state_service.load_session(account_id)
-            else:
-                regenerated_preview = session.preview
-
-            biz_id = (session.preview.biz_id or request.biz_id or "").strip() if session.preview else ""
-            sign_mode = session.purchase_mode or ("upgrade" if session.is_subscribed else "new_purchase")
-            sign_attempts: list[dict[str, Any]] = []
-
-            for sign_attempt in range(1, 4):
-                try:
-                    result = self._request_sign(
-                        account,
-                        session,
-                        pay_type=request.pay_type,
-                        product_id=product_id,
-                        biz_id=biz_id,
-                        invitation_code=invitation,
+                if not session.preview or not session.preview.biz_id:
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="sign",
+                        status="retry",
+                        message="当前 preview 无 bizId，重新拉起 preview 链路",
+                        details={"cycle": cycle, "product_id": product_id},
+                        level=logging.WARNING,
                     )
-                    payload = self._ensure_dict(result.data, label="createSign.data")
-                    sign = str(payload.get("sign") or "")
-                    order_id = str(payload.get("orderId") or "")
-                    if not sign:
-                        raise UpstreamRequestError(
-                            "create-sign 没返回 sign，二维码自然也出不来。",
-                            details={"payload": result.raw},
+                    self.preview_payment(
+                        account_id,
+                        PreviewPaymentRequest(
+                            product_id=product_id,
+                            invitation_code=invitation,
+                        ),
+                        flow=flow,
+                    )
+                    session = self.state_service.load_session(account_id)
+
+                biz_id = (session.preview.biz_id or request.biz_id or "").strip() if session.preview else ""
+                sign_mode = session.purchase_mode or ("upgrade" if session.is_subscribed else "new_purchase")
+                sign_attempts: list[dict[str, Any]] = []
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="sign",
+                    status="started",
+                    message=f"开始第 {cycle} 轮签单",
+                    details={"cycle": cycle, "biz_id": biz_id, "mode": sign_mode},
+                )
+
+                for sign_attempt in range(1, 4):
+                    self._ensure_not_paused(account_id)
+                    try:
+                        result = self._request_sign(
+                            account,
+                            session,
+                            pay_type=request.pay_type,
+                            product_id=product_id,
+                            biz_id=biz_id,
+                            invitation_code=invitation,
+                        )
+                        payload = self._ensure_dict(result.data, label="createSign.data")
+                        sign = str(payload.get("sign") or "")
+                        order_id = str(payload.get("orderId") or "")
+                        if not sign:
+                            raise UpstreamRequestError(
+                                "create-sign 没返回 sign，二维码自然也出不来。",
+                                details={"payload": result.raw},
+                            )
+
+                        sign_attempts.append(
+                            {
+                                "attempt": sign_attempt,
+                                "ok": True,
+                                "mode": sign_mode,
+                                "order_id": order_id,
+                                "biz_id": biz_id,
+                                "response": result.raw,
+                            }
+                        )
+                        qr_cycles.append(
+                            {
+                                "cycle": cycle,
+                                "preview_biz_id": biz_id,
+                                "sign_attempts": sign_attempts,
+                            }
                         )
 
-                    sign_attempts.append(
-                        {
-                            "attempt": sign_attempt,
-                            "ok": True,
-                            "mode": sign_mode,
-                            "order_id": order_id,
-                            "biz_id": biz_id,
-                            "response": result.raw,
-                        }
-                    )
-                    qr_cycles.append(
-                        {
-                            "cycle": cycle,
-                            "preview_biz_id": biz_id,
-                            "sign_attempts": sign_attempts,
-                        }
-                    )
+                        product_name = next(
+                            (item.product_name for item in session.products if item.product_id == product_id),
+                            "",
+                        )
+                        amount = session.preview.third_party_amount if session.preview else ""
+                        now = utc_now_iso()
+                        task = PaymentTaskRecord(
+                            id=make_id("task"),
+                            account_id=account_id,
+                            product_id=product_id,
+                            product_name=product_name,
+                            pay_type=request.pay_type,
+                            biz_id=biz_id,
+                            amount=amount,
+                            sign=sign,
+                            qr_base64=self._build_qr_base64(sign),
+                            status="PENDING",
+                            raw_preview=session.preview.raw if session.preview else {},
+                            raw_sign={
+                                "mode": sign_mode,
+                                "cycle": cycle,
+                                "attempt": sign_attempt,
+                                "attempts": qr_cycles,
+                                "response": result.raw,
+                            },
+                            created_at=now,
+                            updated_at=now,
+                        )
+                        session.last_sign = sign
+                        session.last_order_id = order_id
+                        session.selected_product_id = product_id
+                        self.state_service.save_session(session)
+                        saved_task = self.state_service.save_task(task)
+                        self.runtime_logs.log_event(
+                            flow,
+                            stage="sign",
+                            status="success",
+                            message="签单成功并生成二维码",
+                            details={
+                                "cycle": cycle,
+                                "attempt": sign_attempt,
+                                "biz_id": biz_id,
+                                "order_id": order_id,
+                                "mode": sign_mode,
+                                "amount": amount,
+                                "product_name": product_name,
+                            },
+                        )
+                        if own_flow:
+                            self.runtime_logs.finish_run(
+                                flow,
+                                status="success",
+                                message="二维码生成成功",
+                                details={"biz_id": biz_id, "order_id": order_id, "mode": sign_mode},
+                            )
+                        return saved_task
+                    except UpstreamRequestError as exc:
+                        sign_attempts.append(
+                            {
+                                "attempt": sign_attempt,
+                                "ok": False,
+                                "mode": sign_mode,
+                                "biz_id": biz_id,
+                                "message": exc.message,
+                                "details": exc.details,
+                            }
+                        )
+                        self.runtime_logs.log_event(
+                            flow,
+                            stage="sign_attempt",
+                            status="retry",
+                            message="签单失败，准备重试",
+                            details={
+                                "cycle": cycle,
+                                "attempt": sign_attempt,
+                                "biz_id": biz_id,
+                                "mode": sign_mode,
+                                "error": exc.message,
+                            },
+                            level=logging.WARNING,
+                        )
 
-                    product_name = next(
-                        (item.product_name for item in session.products if item.product_id == product_id),
-                        "",
-                    )
-                    amount = session.preview.third_party_amount if session.preview else ""
-                    now = utc_now_iso()
-                    task = PaymentTaskRecord(
-                        id=make_id("task"),
-                        account_id=account_id,
-                        product_id=product_id,
-                        product_name=product_name,
-                        pay_type=request.pay_type,
-                        biz_id=biz_id,
-                        amount=amount,
-                        sign=sign,
-                        qr_base64=self._build_qr_base64(sign),
-                        status="PENDING",
-                        raw_preview=session.preview.raw if session.preview else {},
-                        raw_sign={
-                            "mode": sign_mode,
-                            "cycle": cycle,
-                            "attempt": sign_attempt,
-                            "attempts": qr_cycles,
-                            "response": result.raw,
-                        },
-                        created_at=now,
-                        updated_at=now,
-                    )
-                    session.last_sign = sign
-                    session.last_order_id = order_id
-                    session.selected_product_id = product_id
-                    self.state_service.save_session(session)
-                    return self.state_service.save_task(task)
-                except UpstreamRequestError as exc:
-                    sign_attempts.append(
-                        {
-                            "attempt": sign_attempt,
-                            "ok": False,
-                            "mode": sign_mode,
-                            "biz_id": biz_id,
-                            "message": exc.message,
-                            "details": exc.details,
-                        }
-                    )
-
-            qr_cycles.append(
-                {
-                    "cycle": cycle,
-                    "preview_biz_id": biz_id,
-                    "sign_attempts": sign_attempts,
-                    "fallback": "rerun_preview_chain",
-                }
-            )
-            session.preview = None
-            session.last_sign = ""
-            session.last_order_id = ""
-            self.state_service.save_session(session)
+                qr_cycles.append(
+                    {
+                        "cycle": cycle,
+                        "preview_biz_id": biz_id,
+                        "sign_attempts": sign_attempts,
+                        "fallback": "rerun_preview_chain",
+                    }
+                )
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="sign",
+                    status="retry",
+                    message="签单连续失败 3 次，清空 preview 后重跑整条链路",
+                    details={"cycle": cycle, "biz_id": biz_id, "mode": sign_mode},
+                    level=logging.WARNING,
+                )
+                session.preview = None
+                session.last_sign = ""
+                session.last_order_id = ""
+                self.state_service.save_session(session)
+        except Exception as exc:
+            if own_flow:
+                self.runtime_logs.finish_run(
+                    flow,
+                    status="failed",
+                    message=f"二维码生成失败：{exc}",
+                    details={"error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
+            raise
 
     def run_payment_flow(
         self,
@@ -591,23 +1021,66 @@ class PaymentService:
         *,
         product_id: str | None = None,
         pay_type: str = "ALI",
+        source: str = "manual",
     ) -> PaymentTaskRecord:
+        self._ensure_not_paused(account_id)
         session = self.state_service.load_session(account_id)
         selected_product_id = (product_id or session.selected_product_id).strip()
         if not selected_product_id:
             raise BadRequestError("请先选择套餐，再启动支付链路")
-        preview = self.preview_payment(
-            account_id,
-            PreviewPaymentRequest(product_id=selected_product_id),
+        flow = self.runtime_logs.start_run(
+            account_id=account_id,
+            action="run_payment_flow",
+            source=source,
+            product_id=selected_product_id,
+            pay_type=pay_type,
+            details={"purchase_mode": session.purchase_mode},
         )
-        return self.create_qr(
-            account_id,
-            CreateQrRequest(
-                product_id=selected_product_id,
-                pay_type=pay_type,
-                biz_id=preview.biz_id,
-            ),
-        )
+        try:
+            preview = self.preview_payment(
+                account_id,
+                PreviewPaymentRequest(product_id=selected_product_id),
+                flow=flow,
+            )
+            task = self.create_qr(
+                account_id,
+                CreateQrRequest(
+                    product_id=selected_product_id,
+                    pay_type=pay_type,
+                    biz_id=preview.biz_id,
+                ),
+                flow=flow,
+            )
+            self.runtime_logs.finish_run(
+                flow,
+                status="success",
+                message="完整支付链路执行成功",
+                details={"biz_id": task.biz_id, "task_id": task.id, "amount": task.amount},
+            )
+            return task
+        except RunPausedError as exc:
+            self.runtime_logs.finish_run(
+                flow,
+                status="paused",
+                message=str(exc),
+                level=logging.WARNING,
+            )
+            raise
+        except Exception as exc:
+            self.runtime_logs.finish_run(
+                flow,
+                status="failed",
+                message=f"完整支付链路失败：{exc}",
+                details={"error": exc.__class__.__name__},
+                level=logging.ERROR,
+            )
+            raise
+
+    def _ensure_not_paused(self, account_id: str) -> None:
+        from app.services.scheduler_service import get_scheduler_service
+
+        if get_scheduler_service().is_pause_requested(account_id):
+            raise RunPausedError("任务已暂停")
 
     def _create_upgrade_sign(
         self,
@@ -690,6 +1163,15 @@ class PaymentService:
             task.updated_at = utc_now_iso()
             self.state_service.save_task(task)
 
+        self.runtime_logs.log_account_event(
+            account_id=account_id,
+            action="check_payment",
+            stage="payment_status",
+            status="success",
+            message="支付状态查询完成",
+            details={"biz_id": biz_id, "status": status},
+        )
+
         return PaymentCheckResult(biz_id=biz_id, status=status, raw=result.raw)
 
     def list_tasks(self, account_id: str) -> list[PaymentTaskRecord]:
@@ -718,11 +1200,21 @@ class PaymentService:
         account_id: str,
         session: AccountSessionState,
         request: PreviewPaymentRequest,
+        *,
+        flow: FlowRun | None = None,
     ) -> tuple[str, str]:
         if (request.ticket or "").strip() and (request.randstr or "").strip():
+            if flow is not None:
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="captcha",
+                    status="reused",
+                    message="复用外部传入的验证码票据",
+                    details={"ticket_ready": True, "randstr_ready": True},
+                )
             return self.captcha_service.resolve_preview_captcha(session, request)
 
-        solved = self.solve_captcha(account_id)
+        solved = self.solve_captcha(account_id, flow=flow)
         verify = solved.get("verify") if isinstance(solved.get("verify"), dict) else {}
         error_code = str(verify.get("error_code") or "")
         if error_code == "50":
@@ -742,6 +1234,14 @@ class PaymentService:
                     "verify": solved.get("verify") or {},
                     "attempts": solved.get("attempts") or [],
                 },
+            )
+        if flow is not None:
+            self.runtime_logs.log_event(
+                flow,
+                stage="captcha",
+                status="success",
+                message="已拿到可用于 preview 的验证码票据",
+                details={"attempts": len(solved.get("attempts") or []), "ticket_ready": True, "randstr_ready": True},
             )
         return ticket, randstr
 

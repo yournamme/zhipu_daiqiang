@@ -20,6 +20,7 @@ class Settings:
     app_host: str
     app_port: int
     data_dir: Path
+    runtime_logs_dir: Path
     accounts_path: Path
     tasks_path: Path
     sessions_dir: Path
@@ -37,6 +38,10 @@ class Settings:
     tencent_captcha_node: str
     tencent_ocr_enabled: bool
     tencent_ocr_include_debug: bool
+    tencent_ocr_workers: int
+    tencent_ocr_timeout_seconds: int
+    runtime_log_level: str
+    runtime_log_retention_days: int
 
 
 @lru_cache(maxsize=1)
@@ -44,13 +49,16 @@ def get_settings() -> Settings:
     """Load and cache project settings."""
     data_dir = _resolve_path(os.getenv("DATA_DIR", "data"))
     sessions_dir = data_dir / "sessions"
+    runtime_logs_dir = data_dir / "logs" / "runtime"
     data_dir.mkdir(parents=True, exist_ok=True)
     sessions_dir.mkdir(parents=True, exist_ok=True)
+    runtime_logs_dir.mkdir(parents=True, exist_ok=True)
 
     return Settings(
         app_host=os.getenv("APP_HOST", "127.0.0.1").strip() or "127.0.0.1",
         app_port=_parse_int(os.getenv("APP_PORT", "8787"), field_name="APP_PORT"),
         data_dir=data_dir,
+        runtime_logs_dir=runtime_logs_dir,
         accounts_path=data_dir / "accounts.json",
         tasks_path=data_dir / "tasks.json",
         sessions_dir=sessions_dir,
@@ -84,6 +92,19 @@ def get_settings() -> Settings:
         tencent_captcha_node=os.getenv("TENCENT_CAPTCHA_NODE", "node").strip() or "node",
         tencent_ocr_enabled=_parse_bool(os.getenv("TENCENT_OCR_ENABLED", "1")),
         tencent_ocr_include_debug=_parse_bool(os.getenv("TENCENT_OCR_INCLUDE_DEBUG", "0")),
+        tencent_ocr_workers=_parse_int(
+            os.getenv("TENCENT_OCR_WORKERS", str(max(1, min(4, os.cpu_count() or 1)))),
+            field_name="TENCENT_OCR_WORKERS",
+        ),
+        tencent_ocr_timeout_seconds=_parse_int(
+            os.getenv("TENCENT_OCR_TIMEOUT_SECONDS", "6"),
+            field_name="TENCENT_OCR_TIMEOUT_SECONDS",
+        ),
+        runtime_log_level=os.getenv("RUNTIME_LOG_LEVEL", "INFO").strip() or "INFO",
+        runtime_log_retention_days=_parse_int(
+            os.getenv("RUNTIME_LOG_RETENTION_DAYS", "7"),
+            field_name="RUNTIME_LOG_RETENTION_DAYS",
+        ),
     )
 
 

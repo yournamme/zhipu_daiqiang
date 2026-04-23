@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+
+from app.runtime_logging import get_runtime_log_service
+
+logger = logging.getLogger(__name__)
 
 
 class GlmDeskError(Exception):
@@ -76,11 +81,54 @@ def install_exception_handlers(app: FastAPI) -> None:
     """Register shared exception handlers."""
 
     @app.exception_handler(GlmDeskError)
-    async def handle_glm_desk_error(_: Request, exc: GlmDeskError) -> JSONResponse:
+    async def handle_glm_desk_error(request: Request, exc: GlmDeskError) -> JSONResponse:
+        logger.warning("application error on %s: %s", request.url.path, exc.message)
+        account_id = str(request.path_params.get("account_id") or "").strip()
+        runtime_logs = get_runtime_log_service()
+        if account_id:
+            runtime_logs.log_account_event(
+                account_id=account_id,
+                action="request",
+                stage="http_error",
+                status="failed",
+                message=exc.message,
+                details={"path": request.url.path, "code": exc.code, "details": exc.details},
+                level=logging.WARNING,
+            )
+        else:
+            runtime_logs.log_system_event(
+                stage="http_error",
+                status="failed",
+                message=exc.message,
+                details={"path": request.url.path, "code": exc.code, "details": exc.details},
+                level=logging.WARNING,
+            )
         return JSONResponse(status_code=exc.status_code, content=exc.to_payload())
 
     @app.exception_handler(Exception)
-    async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
+    async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("unexpected error on %s: %s", request.url.path, exc)
+        account_id = str(request.path_params.get("account_id") or "").strip()
+        runtime_logs = get_runtime_log_service()
+        details = {"path": request.url.path, "type": exc.__class__.__name__}
+        if account_id:
+            runtime_logs.log_account_event(
+                account_id=account_id,
+                action="request",
+                stage="http_error",
+                status="failed",
+                message="服务内部异常",
+                details=details,
+                level=logging.ERROR,
+            )
+        else:
+            runtime_logs.log_system_event(
+                stage="http_error",
+                status="failed",
+                message="服务内部异常",
+                details=details,
+                level=logging.ERROR,
+            )
         payload = GlmDeskError(
             "服务内部异常",
             status_code=500,

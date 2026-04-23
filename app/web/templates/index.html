@@ -327,11 +327,11 @@
     }
 
     .col-account {
-      width: 190px;
+      width: 150px;
     }
 
     .col-actions {
-      width: 138px;
+      width: 152px;
     }
 
     .inline-row {
@@ -677,6 +677,7 @@
           </option>
         `).join("");
         const scheduleStatus = account.last_schedule_status || "-";
+        const isRunning = ["running", "pause_requested"].includes(String(scheduleStatus).toLowerCase());
         const qrHtml = latestTask?.qr_base64
           ? `<div class="qr-cell">
                <img src="${esc(latestTask.qr_base64)}" alt="支付二维码">
@@ -743,7 +744,7 @@
             <td>${qrHtml}</td>
             <td>
               <div class="tiny-actions">
-                <button class="mini-btn primary" type="button" data-action="run-now">立即启动</button>
+                <button class="mini-btn primary" type="button" data-action="${isRunning ? "pause-account" : "run-now"}">${isRunning ? "暂停任务" : "立即启动"}</button>
                 <button class="mini-btn" type="button" data-action="sync-account">同步并换指纹</button>
                 <button class="mini-btn" type="button" data-action="delete-account">删除账号</button>
               </div>
@@ -793,7 +794,14 @@
         if (action === "run-now") {
           setStatus("正在启动支付链路，请稍候...", "warn");
           await api(`/api/accounts/${encodeURIComponent(accountId)}/run`, { method: "POST" });
-          setStatus("支付二维码已更新。", "ok");
+          setStatus("任务已启动。", "ok");
+          await refreshDashboard();
+          return;
+        }
+        if (action === "pause-account") {
+          setStatus("正在提交暂停请求...", "warn");
+          await api(`/api/accounts/${encodeURIComponent(accountId)}/pause`, { method: "POST" });
+          setStatus("暂停请求已提交。", "ok");
           await refreshDashboard();
           return;
         }

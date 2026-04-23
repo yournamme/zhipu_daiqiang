@@ -125,7 +125,16 @@ def create_qr(account_id: str, payload: CreateQrRequest):
 
 @router.post("/api/accounts/{account_id}/run")
 def run_payment_flow(account_id: str):
-    return success(payment_service.run_payment_flow(account_id))
+    from app.services.scheduler_service import get_scheduler_service
+
+    return success(get_scheduler_service().start_account_flow(account_id, source="manual"))
+
+
+@router.post("/api/accounts/{account_id}/pause")
+def pause_account_flow(account_id: str):
+    from app.services.scheduler_service import get_scheduler_service
+
+    return success(get_scheduler_service().request_pause(account_id))
 
 
 @router.get("/api/accounts/{account_id}/payments/check/{biz_id}")

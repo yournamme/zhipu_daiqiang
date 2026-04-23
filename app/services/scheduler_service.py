@@ -8,8 +8,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.errors import GlmDeskError
+from app.runtime_logging import get_runtime_log_service
 from app.services.account_state import get_account_state_service, utc_now_iso
-from app.services.payment_service import get_payment_service
+from app.services.payment_service import RunPausedError, get_payment_service
 
 logger = logging.getLogger(__name__)
 try:
@@ -24,9 +25,11 @@ class SchedulerService:
     def __init__(self) -> None:
         self.state_service = get_account_state_service()
         self.payment_service = get_payment_service()
+        self.runtime_logs = get_runtime_log_service()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._running_accounts: set[str] = set()
+        self._pause_requested: set[str] = set()
         self._lock = threading.Lock()
 
     def start(self) -> None:
@@ -36,11 +39,21 @@ class SchedulerService:
         self._thread = threading.Thread(target=self._run_loop, name="glm-desk-scheduler", daemon=True)
         self._thread.start()
         threading.Thread(target=self.check_cached_accounts_once, name="glm-desk-account-check", daemon=True).start()
+        self.runtime_logs.log_system_event(
+            stage="scheduler",
+            status="started",
+            message="调度器已启动",
+        )
 
     def stop(self) -> None:
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
+        self.runtime_logs.log_system_event(
+            stage="scheduler",
+            status="stopped",
+            message="调度器已停止",
+        )
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -48,6 +61,13 @@ class SchedulerService:
                 self.poll_once()
             except Exception as exc:  # pragma: no cover - defensive scheduler guard
                 logger.exception("scheduler poll failed: %s", exc)
+                self.runtime_logs.log_system_event(
+                    stage="scheduler_poll",
+                    status="failed",
+                    message=f"调度器轮询失败：{exc}",
+                    details={"error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
             self._stop_event.wait(1)
 
     def poll_once(self) -> None:
@@ -62,20 +82,7 @@ class SchedulerService:
             account = self.state_service.get_account(public_account.id)
             if self._already_ran_today(account, current_date):
                 continue
-            with self._lock:
-                if account.id in self._running_accounts:
-                    continue
-                self._running_accounts.add(account.id)
-            account.last_scheduled_run_at = utc_now_iso()
-            account.last_schedule_status = "running"
-            account.last_schedule_message = ""
-            self.state_service.update_account(account)
-            threading.Thread(
-                target=self._run_account_flow,
-                args=(account.id,),
-                name=f"glm-desk-run-{account.id}",
-                daemon=True,
-            ).start()
+            self.start_account_flow(account.id, source="scheduled")
 
     def check_cached_accounts_once(self) -> None:
         for public_account in self.state_service.list_accounts():
@@ -91,11 +98,27 @@ class SchedulerService:
                     status="valid",
                     message="启动检查通过",
                 )
+                self.runtime_logs.log_account_event(
+                    account_id=account_id,
+                    action="startup_check",
+                    stage="bootstrap",
+                    status="success",
+                    message="启动检查通过",
+                )
             except GlmDeskError as exc:
                 self.state_service.set_account_status(
                     account_id,
                     status="expired",
                     message=exc.message,
+                )
+                self.runtime_logs.log_account_event(
+                    account_id=account_id,
+                    action="startup_check",
+                    stage="bootstrap",
+                    status="failed",
+                    message=exc.message,
+                    details=exc.details,
+                    level=logging.WARNING,
                 )
             except Exception as exc:  # pragma: no cover - defensive startup check
                 self.state_service.set_account_status(
@@ -104,17 +127,84 @@ class SchedulerService:
                     message=str(exc),
                 )
                 logger.exception("account startup check failed for %s: %s", account_id, exc)
+                self.runtime_logs.log_account_event(
+                    account_id=account_id,
+                    action="startup_check",
+                    stage="bootstrap",
+                    status="failed",
+                    message=str(exc),
+                    details={"error": exc.__class__.__name__},
+                    level=logging.ERROR,
+                )
             finally:
                 with self._lock:
                     self._running_accounts.discard(account_id)
+
+    def start_account_flow(self, account_id: str, *, source: str = "manual") -> dict[str, object]:
+        with self._lock:
+            if account_id in self._running_accounts:
+                self.runtime_logs.log_account_event(
+                    account_id=account_id,
+                    action="run_payment_flow",
+                    stage="scheduler",
+                    status="ignored",
+                    message="账号任务已在运行，忽略重复启动",
+                    details={"source": source},
+                    level=logging.WARNING,
+                )
+                return {"started": False, "status": "running"}
+            self._pause_requested.discard(account_id)
+            self._running_accounts.add(account_id)
+        account = self.state_service.get_account(account_id)
+        account.last_scheduled_run_at = utc_now_iso()
+        account.last_schedule_status = "running"
+        account.last_schedule_message = "定时任务运行中" if source == "scheduled" else "手动任务运行中"
+        self.state_service.update_account(account)
+        self.runtime_logs.log_account_event(
+            account_id=account_id,
+            action="run_payment_flow",
+            stage="scheduler",
+            status="started",
+            message="已提交账号运行任务",
+            details={"source": source, "scheduled_start_time": account.scheduled_start_time},
+        )
+        threading.Thread(
+            target=self._run_account_flow,
+            args=(account_id, source),
+            name=f"glm-desk-run-{account_id}",
+            daemon=True,
+        ).start()
+        return {"started": True, "status": "running"}
+
+    def request_pause(self, account_id: str) -> dict[str, object]:
+        with self._lock:
+            if account_id not in self._running_accounts:
+                return {"paused": False, "status": "idle"}
+            self._pause_requested.add(account_id)
+        account = self.state_service.get_account(account_id)
+        account.last_schedule_status = "pause_requested"
+        account.last_schedule_message = "暂停请求已提交"
+        self.state_service.update_account(account)
+        self.runtime_logs.log_account_event(
+            account_id=account_id,
+            action="run_payment_flow",
+            stage="pause",
+            status="requested",
+            message="暂停请求已提交",
+        )
+        return {"paused": True, "status": "pause_requested"}
+
+    def is_pause_requested(self, account_id: str) -> bool:
+        with self._lock:
+            return account_id in self._pause_requested
 
     def _already_ran_today(self, account, current_date: str) -> bool:
         raw = (account.last_scheduled_run_at or "").strip()
         return raw.startswith(current_date)
 
-    def _run_account_flow(self, account_id: str) -> None:
+    def _run_account_flow(self, account_id: str, source: str) -> None:
         try:
-            task = self.payment_service.run_payment_flow(account_id)
+            task = self.payment_service.run_payment_flow(account_id, source=source)
             account = self.state_service.get_account(account_id)
             account.last_schedule_status = "success"
             account.last_schedule_message = f"生成二维码成功：{task.biz_id}"
@@ -122,6 +212,18 @@ class SchedulerService:
             account.account_status_message = "最近一次执行成功"
             account.account_checked_at = utc_now_iso()
             self.state_service.update_account(account)
+        except RunPausedError as exc:
+            account = self.state_service.get_account(account_id)
+            account.last_schedule_status = "paused"
+            account.last_schedule_message = str(exc)
+            self.state_service.update_account(account)
+            self.runtime_logs.log_account_event(
+                account_id=account_id,
+                action="run_payment_flow",
+                stage="scheduler",
+                status="paused",
+                message=str(exc),
+            )
         except Exception as exc:
             account = self.state_service.get_account(account_id)
             account.last_schedule_status = "failed"
@@ -131,9 +233,19 @@ class SchedulerService:
             account.account_checked_at = utc_now_iso()
             self.state_service.update_account(account)
             logger.exception("scheduled account flow failed for %s: %s", account_id, exc)
+            self.runtime_logs.log_account_event(
+                account_id=account_id,
+                action="run_payment_flow",
+                stage="scheduler",
+                status="failed",
+                message=str(exc),
+                details={"source": source, "error": exc.__class__.__name__},
+                level=logging.ERROR,
+            )
         finally:
             with self._lock:
                 self._running_accounts.discard(account_id)
+                self._pause_requested.discard(account_id)
 
 
 _scheduler_service: SchedulerService | None = None
