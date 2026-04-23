@@ -498,6 +498,10 @@ class PaymentService:
             while True:
                 self._ensure_not_paused(account_id)
                 attempt += 1
+                self._push_runtime_message(
+                    account_id,
+                    f"正在识别验证码，第 {attempt} 轮",
+                )
                 self.runtime_logs.log_event(
                     flow,
                     stage="captcha_attempt",
@@ -531,6 +535,10 @@ class PaymentService:
                         details={"attempt": attempt, "error": exc.message, "details": exc.details},
                         level=logging.WARNING,
                     )
+                    self._push_runtime_message(
+                        account_id,
+                        f"验证码 OCR 异常，第 {attempt} 轮重试中",
+                    )
                     continue
                 ocr_gate = self._captcha_ocr_gate(challenge)
                 if not ocr_gate["usable"]:
@@ -556,6 +564,10 @@ class PaymentService:
                         message="OCR 点位未达标，刷新验证码重试",
                         details={"attempt": attempt, **ocr_gate},
                         level=logging.WARNING,
+                    )
+                    self._push_runtime_message(
+                        account_id,
+                        f"验证码点位不足或不匹配，第 {attempt} 轮重试中",
                     )
                     continue
 
@@ -583,6 +595,10 @@ class PaymentService:
                         details={"attempt": attempt, "error_code": error_code},
                         level=logging.WARNING,
                     )
+                    self._push_runtime_message(
+                        account_id,
+                        f"验证码 verify 返回 error=50，第 {attempt} 轮重试中",
+                    )
                     continue
                 if (error_code and error_code != "0") or not result["ticket"] or not result["randstr"]:
                     result["ticket"] = ""
@@ -602,6 +618,10 @@ class PaymentService:
                         },
                         level=logging.WARNING,
                     )
+                    self._push_runtime_message(
+                        account_id,
+                        f"验证码 verify 未通过，第 {attempt} 轮重试中",
+                    )
                     continue
                 attempts.append(result)
                 last_result = result
@@ -611,6 +631,10 @@ class PaymentService:
                     status="success",
                     message="验证码识别成功",
                     details={"attempt": attempt, "ticket_ready": True, "randstr_ready": True},
+                )
+                self._push_runtime_message(
+                    account_id,
+                    f"验证码识别成功，共尝试 {attempt} 轮",
                 )
                 solved = {
                     **result,
@@ -664,6 +688,10 @@ class PaymentService:
             while True:
                 self._ensure_not_paused(account_id)
                 preview_round += 1
+                self._push_runtime_message(
+                    account_id,
+                    f"正在进行 preview 验证，第 {preview_round} 轮",
+                )
                 self.runtime_logs.log_event(
                     flow,
                     stage="preview",
@@ -703,6 +731,10 @@ class PaymentService:
                         message="preview 请求失败，重新开始整条链路",
                         details={"round": preview_round, "error": exc.message, "details": exc.details},
                         level=logging.WARNING,
+                    )
+                    self._push_runtime_message(
+                        account_id,
+                        f"preview 请求失败，第 {preview_round} 轮重试中",
                     )
                     session = self.state_service.load_session(account_id)
                     continue
@@ -759,6 +791,10 @@ class PaymentService:
                             "third_party_amount": preview.third_party_amount,
                         },
                     )
+                    self._push_runtime_message(
+                        account_id,
+                        f"preview 成功，已获取 bizId：{biz_id}",
+                    )
                     if own_flow:
                         self.runtime_logs.finish_run(
                             flow,
@@ -781,6 +817,10 @@ class PaymentService:
                         "msg": raw.get("msg") or "",
                     },
                     level=logging.WARNING,
+                )
+                self._push_runtime_message(
+                    account_id,
+                    f"获取 bizId 失败，第 {preview_round} 轮继续重试",
                 )
                 session = self.state_service.load_session(account_id)
         except Exception as exc:
@@ -835,6 +875,10 @@ class PaymentService:
                 cycle += 1
                 session = self.state_service.load_session(account_id)
                 if not session.preview or not session.preview.biz_id:
+                    self._push_runtime_message(
+                        account_id,
+                        "当前没有可用 bizId，正在重新拉起 preview 链路",
+                    )
                     self.runtime_logs.log_event(
                         flow,
                         stage="sign",
@@ -856,6 +900,10 @@ class PaymentService:
                 biz_id = (session.preview.biz_id or request.biz_id or "").strip() if session.preview else ""
                 sign_mode = session.purchase_mode or ("upgrade" if session.is_subscribed else "new_purchase")
                 sign_attempts: list[dict[str, Any]] = []
+                self._push_runtime_message(
+                    account_id,
+                    f"已获取 bizId，正在生成支付二维码，第 {cycle} 轮",
+                )
                 self.runtime_logs.log_event(
                     flow,
                     stage="sign",
@@ -950,6 +998,10 @@ class PaymentService:
                                 "product_name": product_name,
                             },
                         )
+                        self._push_runtime_message(
+                            account_id,
+                            f"二维码生成成功，bizId：{biz_id}",
+                        )
                         if own_flow:
                             self.runtime_logs.finish_run(
                                 flow,
@@ -983,6 +1035,10 @@ class PaymentService:
                             },
                             level=logging.WARNING,
                         )
+                        self._push_runtime_message(
+                            account_id,
+                            f"支付二维码签单失败，第 {sign_attempt} 次重试中",
+                        )
 
                 qr_cycles.append(
                     {
@@ -999,6 +1055,10 @@ class PaymentService:
                     message="签单连续失败 3 次，清空 preview 后重跑整条链路",
                     details={"cycle": cycle, "biz_id": biz_id, "mode": sign_mode},
                     level=logging.WARNING,
+                )
+                self._push_runtime_message(
+                    account_id,
+                    "签单连续失败 3 次，正在重新获取 bizId",
                 )
                 session.preview = None
                 session.last_sign = ""
@@ -1037,6 +1097,10 @@ class PaymentService:
             details={"purchase_mode": session.purchase_mode},
         )
         try:
+            self._push_runtime_message(
+                account_id,
+                "任务已启动，正在准备支付链路",
+            )
             preview = self.preview_payment(
                 account_id,
                 PreviewPaymentRequest(product_id=selected_product_id),
@@ -1081,6 +1145,22 @@ class PaymentService:
 
         if get_scheduler_service().is_pause_requested(account_id):
             raise RunPausedError("任务已暂停")
+
+    def _push_runtime_message(
+        self,
+        account_id: str,
+        message: str,
+        *,
+        schedule_status: str = "running",
+        account_status_message: str | None = None,
+    ) -> None:
+        self.state_service.update_runtime_progress(
+            account_id,
+            schedule_status=schedule_status,
+            schedule_message=message,
+            account_status_message=account_status_message,
+        )
+        logger.info("[%s] %s", account_id, message)
 
     def _create_upgrade_sign(
         self,

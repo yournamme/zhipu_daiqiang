@@ -167,6 +167,36 @@ class AccountStateService:
         self.accounts_store.update(updater)
         return account
 
+    def update_runtime_progress(
+        self,
+        account_id: str,
+        *,
+        schedule_status: str | None = None,
+        schedule_message: str | None = None,
+        account_status_message: str | None = None,
+    ) -> AccountRecord:
+        updated_account: AccountRecord | None = None
+
+        def updater(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            nonlocal updated_account
+            for index, item in enumerate(records):
+                if item.get("id") != account_id:
+                    continue
+                account = AccountRecord.model_validate(item)
+                if schedule_status is not None:
+                    account.last_schedule_status = schedule_status.strip() or account.last_schedule_status
+                if schedule_message is not None:
+                    account.last_schedule_message = schedule_message.strip()
+                if account_status_message is not None:
+                    account.account_status_message = account_status_message.strip()
+                records[index] = account.model_dump()
+                updated_account = account
+                return records
+            raise NotFoundError("账号不存在", details={"account_id": account_id})
+
+        self.accounts_store.update(updater)
+        return updated_account or self.get_account(account_id)
+
     def rotate_browser_impersonate(self, account_id: str) -> AccountRecord:
         account = self.get_account(account_id)
         current = resolve_browser_impersonate(account.browser_impersonate)

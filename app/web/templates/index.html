@@ -330,6 +330,14 @@
       width: 150px;
     }
 
+    .col-schedule {
+      width: 128px;
+    }
+
+    .col-qr {
+      width: 236px;
+    }
+
     .col-actions {
       width: 152px;
     }
@@ -359,12 +367,12 @@
     .qr-cell {
       display: grid;
       gap: 8px;
-      min-width: 160px;
+      min-width: 212px;
     }
 
     .qr-cell img {
-      width: 118px;
-      height: 118px;
+      width: 168px;
+      height: 168px;
       border-radius: 14px;
       border: 1px solid var(--line);
       background: #fff;
@@ -373,8 +381,8 @@
 
     .qr-placeholder {
       display: grid;
-      width: 118px;
-      height: 118px;
+      width: 168px;
+      height: 168px;
       place-items: center;
       border: 1px dashed var(--line-strong);
       border-radius: 14px;
@@ -557,9 +565,9 @@
               <th class="col-account">账号</th>
               <th>模式 / 指纹</th>
               <th>套餐</th>
-              <th>定时启动</th>
+              <th class="col-schedule">定时启动</th>
               <th>状态</th>
-              <th>支付二维码</th>
+              <th class="col-qr">支付二维码</th>
               <th class="col-actions">操作</th>
             </tr>
           </thead>
@@ -671,6 +679,12 @@
         const latestTask = detail?.tasks?.[0] || null;
         const products = Array.isArray(session.products) ? session.products : [];
         const selectedProductId = session.selected_product_id || "";
+        const latestProduct = latestTask
+          ? products.find(product => product.product_id === latestTask.product_id)
+          : null;
+        const latestProductLabel = latestTask
+          ? `${latestTask.product_name || latestTask.product_id || "-"}${latestProduct?.unit ? ` / ${latestProduct.unit}` : ""}`
+          : "";
         const options = products.map(product => `
           <option value="${esc(product.product_id)}" ${product.product_id === selectedProductId ? "selected" : ""}>
             ${esc(product.product_name)} / ${esc(product.unit)}
@@ -682,7 +696,7 @@
           ? `<div class="qr-cell">
                <img src="${esc(latestTask.qr_base64)}" alt="支付二维码">
                <div class="stack">
-                 <strong>¥ ${esc(latestTask.amount || "-")} · ${esc(latestTask.product_name || latestTask.product_id || "-")}</strong>
+                 <strong>¥ ${esc(latestTask.amount || "-")} · ${esc(latestProductLabel || "-")}</strong>
                  <span class="subtle mono">bizId: ${esc(latestTask.biz_id || "-")}</span>
                </div>
              </div>`
@@ -720,10 +734,10 @@
               <div class="schedule-box">
                 <label class="inline-row">
                   <input type="checkbox" data-field="schedule-enabled" ${account.schedule_enabled ? "checked" : ""}>
-                  <span class="subtle">启用定时</span>
+                  <span class="subtle">开启定时任务</span>
                 </label>
                 <input type="time" step="1" data-field="schedule-time" value="${esc(account.scheduled_start_time || "09:59:58")}">
-                <button class="mini-btn" type="button" data-action="save-schedule">保存定时</button>
+                <span class="subtle">勾选即开关，时间自动保存。</span>
               </div>
             </td>
             <td>
@@ -819,7 +833,30 @@
           await refreshDashboard();
           return;
         }
-        if (action === "save-schedule") {
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    async function handleTableChange(event) {
+      const action = event.target.dataset.action;
+      const field = event.target.dataset.field;
+      const row = event.target.closest("tr[data-account-id]");
+      if (!row) return;
+      const accountId = row.dataset.accountId;
+      try {
+        if (action === "select-product") {
+          await api(`/api/accounts/${encodeURIComponent(accountId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              selected_product_id: event.target.value
+            })
+          });
+          setStatus("套餐选择已保存。", "ok");
+          await refreshDashboard();
+          return;
+        }
+        if (field === "schedule-enabled" || field === "schedule-time") {
           const enabled = row.querySelector('[data-field="schedule-enabled"]').checked;
           const time = row.querySelector('[data-field="schedule-time"]').value;
           await api(`/api/accounts/${encodeURIComponent(accountId)}`, {
@@ -829,28 +866,9 @@
               scheduled_start_time: time
             })
           });
-          setStatus("定时设置已保存。", "ok");
+          setStatus(enabled ? `定时任务已开启，时间 ${time}。` : `定时任务已关闭，时间已保存为 ${time}。`, "ok");
           await refreshDashboard();
         }
-      } catch (error) {
-        showError(error);
-      }
-    }
-
-    async function handleTableChange(event) {
-      const action = event.target.dataset.action;
-      const row = event.target.closest("tr[data-account-id]");
-      if (!row || action !== "select-product") return;
-      const accountId = row.dataset.accountId;
-      try {
-        await api(`/api/accounts/${encodeURIComponent(accountId)}`, {
-          method: "PATCH",
-          body: JSON.stringify({
-            selected_product_id: event.target.value
-          })
-        });
-        setStatus("套餐选择已保存。", "ok");
-        await refreshDashboard();
       } catch (error) {
         showError(error);
       }
@@ -888,7 +906,7 @@
 
     function startPolling() {
       stopPolling();
-      state.pollTimer = window.setInterval(() => refreshDashboard().catch(() => {}), 30000);
+      state.pollTimer = window.setInterval(() => refreshDashboard().catch(() => {}), 5000);
     }
 
     function stopPolling() {
