@@ -1518,7 +1518,7 @@ class PaymentService:
         return ""
 
     def _build_qr_base64(self, content: str) -> str:
-        qr = qrcode.QRCode(border=1, box_size=8)
+        qr = qrcode.QRCode(border=4, box_size=12, error_correction=qrcode.constants.ERROR_CORRECT_M)
         qr.add_data(content)
         qr.make(fit=True)
         image = qr.make_image(fill_color="black", back_color="white")
