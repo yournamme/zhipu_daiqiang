@@ -28,6 +28,7 @@ class Settings:
     bigmodel_origin: str
     bigmodel_referer: str
     browser_impersonate: str
+    bootstrap_fingerprint_max_retries: int
     request_timeout_seconds: float
     default_language: str
     tencent_captcha_domain: str
@@ -66,6 +67,13 @@ def get_settings() -> Settings:
         bigmodel_origin=os.getenv("BIGMODEL_ORIGIN", "https://www.bigmodel.cn").rstrip("/"),
         bigmodel_referer=os.getenv("BIGMODEL_REFERER", "https://www.bigmodel.cn/glm-coding").strip(),
         browser_impersonate=os.getenv("BROWSER_IMPERSONATE", "chrome124").strip() or "chrome124",
+        bootstrap_fingerprint_max_retries=max(
+            1,
+            _parse_int(
+                os.getenv("BOOTSTRAP_FINGERPRINT_MAX_RETRIES", "99"),
+                field_name="BOOTSTRAP_FINGERPRINT_MAX_RETRIES",
+            ),
+        ),
         request_timeout_seconds=_parse_float(
             os.getenv("REQUEST_TIMEOUT_SECONDS", "20"),
             field_name="REQUEST_TIMEOUT_SECONDS",

@@ -158,7 +158,13 @@
 
 ### 6. 同步并换指纹
 
-点击 `同步并换指纹` 后，会先给该账号分配一个新的账号级伪装指纹，再重新同步账号上下文和套餐。
+点击 `同步并换指纹` 后，会按“换指纹 -> 同步账号上下文 -> 同步套餐”的顺序执行。
+
+如果同步失败，后端会继续换下一个指纹并重试，直到同步成功或达到最大重试次数。
+
+默认最大重试次数：
+
+- `BOOTSTRAP_FINGERPRINT_MAX_RETRIES=99`
 
 这适合在上游风控、链路异常、套餐状态异常时主动切换一套新的网络指纹继续尝试。
 
@@ -380,6 +386,7 @@ BIGMODEL_API_BASE=https://www.bigmodel.cn/api
 BIGMODEL_ORIGIN=https://www.bigmodel.cn
 BIGMODEL_REFERER=https://www.bigmodel.cn/glm-coding
 BROWSER_IMPERSONATE=chrome124
+BOOTSTRAP_FINGERPRINT_MAX_RETRIES=99
 REQUEST_TIMEOUT_SECONDS=20
 DEFAULT_LANGUAGE=zh-CN
 TENCENT_CAPTCHA_DOMAIN=https://turing.captcha.qcloud.com
@@ -412,6 +419,7 @@ RUNTIME_LOG_RETENTION_DAYS=7
 | `BIGMODEL_ORIGIN` | `https://www.bigmodel.cn` | BigModel 请求头 `Origin` 默认值 |
 | `BIGMODEL_REFERER` | `https://www.bigmodel.cn/glm-coding` | BigModel 请求头 `Referer` 默认值 |
 | `BROWSER_IMPERSONATE` | `chrome124` | `curl-cffi` 的全局兜底 `impersonate` 值；账号实际请求优先用账号自己的随机 `browser_impersonate` |
+| `BOOTSTRAP_FINGERPRINT_MAX_RETRIES` | `99` | 点击“同步并换指纹”时的最大尝试次数；每轮先换一个账号级指纹，再完整同步上下文和套餐，失败才进入下一轮 |
 | `REQUEST_TIMEOUT_SECONDS` | `20` | 上游 HTTP 请求超时时间，单位秒 |
 | `DEFAULT_LANGUAGE` | `zh-CN` | 默认请求语言，会写入 `Accept-Language` 和 `Set-Language` |
 | `TENCENT_CAPTCHA_DOMAIN` | `https://turing.captcha.qcloud.com` | 腾讯验证码域名 |
@@ -432,6 +440,7 @@ RUNTIME_LOG_RETENTION_DAYS=7
 - `BROWSER_IMPERSONATE` 现在主要是全局兜底值和 transport 展示值
 - 真正运行时优先用账号自己的 `browser_impersonate`
 - 账号级 `browser_impersonate` 在首次导入账号时随机分配为 `chrome / edge / firefox`
+- `BOOTSTRAP_FINGERPRINT_MAX_RETRIES` 小于 `1` 时会自动按 `1` 处理，避免配置错误导致完全不尝试
 - 如果你把 `TENCENT_OCR_WORKERS` 配得太高，OCR 并发会更猛，但内存占用也会跟着往上窜，别一上来就梭哈
 
 ## 已知说明

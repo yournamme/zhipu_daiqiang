@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from app.models import (
@@ -23,10 +23,22 @@ from app.services.payment_service import get_payment_service
 router = APIRouter()
 payment_service = get_payment_service()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
+SPA_INDEX = Path(__file__).resolve().parents[2] / "web" / "dist" / "index.html"
 
 
 @router.get("/", response_class=HTMLResponse)
 def index(request: Request, ic: str = Query(default="")):
+    if SPA_INDEX.exists():
+        return FileResponse(SPA_INDEX)
+    return render_legacy_index(request, ic)
+
+
+@router.get("/legacy", response_class=HTMLResponse)
+def legacy_index(request: Request, ic: str = Query(default="")):
+    return render_legacy_index(request, ic)
+
+
+def render_legacy_index(request: Request, ic: str = ""):
     return templates.TemplateResponse(
         request=request,
         name="index.html",

@@ -13,6 +13,7 @@ import qrcode
 
 from app.clients.bigmodel_client import BigModelClient, get_bigmodel_client
 from app.clients.tencent_captcha_client import TencentCaptchaClient, get_tencent_captcha_client
+from app.config import get_settings
 from app.errors import BadRequestError, GlmDeskError, UpstreamRequestError
 from app.models import (
     AccountDetailResponse,
@@ -92,6 +93,7 @@ class PaymentService:
         self.ocr_service = ocr_service or get_ocr_service()
         self.tdc_service = tdc_service or get_tdc_service()
         self.runtime_logs = runtime_log_service or get_runtime_log_service()
+        self.settings = get_settings()
 
     def health_payload(self) -> dict[str, Any]:
         return {
@@ -131,111 +133,160 @@ class PaymentService:
                 action="bootstrap_account",
                 source="refresh_fingerprint" if refresh_fingerprint else "manual",
             )
-        try:
-            if refresh_fingerprint:
-                rotated = self.state_service.rotate_browser_impersonate(account_id)
-                self.runtime_logs.log_event(
-                    flow,
-                    stage="fingerprint",
-                    status="rotated",
-                    message="账号指纹已刷新",
-                    details={"browser_impersonate": rotated.browser_impersonate},
+        assert flow is not None
+        max_attempts = self.settings.bootstrap_fingerprint_max_retries if refresh_fingerprint else 1
+        for attempt in range(1, max_attempts + 1):
+            try:
+                detail = self._bootstrap_account_once(
+                    account_id,
+                    refresh_fingerprint=refresh_fingerprint,
+                    flow=flow,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
                 )
-            account = self.state_service.get_account(account_id)
-            session = self.state_service.load_session(account_id)
+                if own_flow:
+                    self.runtime_logs.finish_run(
+                        flow,
+                        status="success",
+                        message="账号同步完成",
+                        details={
+                            "attempt": attempt,
+                            "max_attempts": max_attempts,
+                            "product_count": len(detail.session.products),
+                            "selected_product_id": detail.session.selected_product_id,
+                            "purchase_mode": detail.session.purchase_mode,
+                        },
+                    )
+                return detail
+            except Exception as exc:
+                if attempt < max_attempts:
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="bootstrap_retry",
+                        status="retry",
+                        message=f"账号同步失败，准备更换指纹重试（{attempt}/{max_attempts}）：{exc}",
+                        details={
+                            "attempt": attempt,
+                            "max_attempts": max_attempts,
+                            "error": exc.__class__.__name__,
+                        },
+                        level=logging.WARNING,
+                    )
+                    continue
+                account = self.state_service.get_account(account_id)
+                account.account_status = "error"
+                account.account_status_message = str(exc)
+                account.account_checked_at = utc_now_iso()
+                self.state_service.update_account(account)
+                if own_flow:
+                    self.runtime_logs.finish_run(
+                        flow,
+                        status="failed",
+                        message=f"账号同步失败：{exc}",
+                        details={
+                            "attempt": attempt,
+                            "max_attempts": max_attempts,
+                            "error": exc.__class__.__name__,
+                        },
+                        level=logging.ERROR,
+                    )
+                raise
+        raise RuntimeError("bootstrap retry loop exited unexpectedly")
 
+    def _bootstrap_account_once(
+        self,
+        account_id: str,
+        *,
+        refresh_fingerprint: bool,
+        flow: FlowRun,
+        attempt: int,
+        max_attempts: int,
+    ) -> AccountDetailResponse:
+        if refresh_fingerprint:
+            rotated = self.state_service.rotate_browser_impersonate(account_id)
             self.runtime_logs.log_event(
                 flow,
-                stage="get_customer_info",
-                status="started",
-                message="开始同步账号上下文",
-                details={"browser_impersonate": account.browser_impersonate},
-            )
-            user_info_result = self.bigmodel_client.get_customer_info(account, session)
-            user_info = self._ensure_dict(user_info_result.data, label="getCustomerInfo.data")
-            organizations = self._extract_organizations(user_info)
-            org_id, project_id = self._choose_org_and_project(
-                organizations=organizations,
-                preferred_org_id=account.org_id or session.org_id,
-                preferred_project_id=account.project_id or session.project_id,
-            )
-
-            session.org_id = org_id
-            session.project_id = project_id
-            session.customer_number = str(user_info.get("customerNumber") or "")
-            session.customer_name = str(user_info.get("customerName") or "")
-            session.user_info = user_info
-            session.organizations = organizations
-
-            if not session.customer_number:
-                raise UpstreamRequestError(
-                    "getCustomerInfo 没返回 customerNumber，后面 create-sign 根本没法拼。",
-                    details={"payload": user_info_result.raw},
-                )
-
-            self.runtime_logs.log_event(
-                flow,
-                stage="get_customer_info",
-                status="success",
-                message="账号上下文同步成功",
+                stage="fingerprint",
+                status="rotated",
+                message="账号指纹已刷新",
                 details={
-                    "customer_number": session.customer_number,
-                    "customer_name": session.customer_name,
-                    "org_id": org_id,
-                    "project_id": project_id,
-                    "organization_count": len(organizations),
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "browser_impersonate": rotated.browser_impersonate,
                 },
             )
+        account = self.state_service.get_account(account_id)
+        session = self.state_service.load_session(account_id)
 
-            account.org_id = org_id
-            account.project_id = project_id
-            account.last_bootstrap_at = utc_now_iso()
-            self.state_service.update_account(account)
+        self.runtime_logs.log_event(
+            flow,
+            stage="get_customer_info",
+            status="started",
+            message="开始同步账号上下文",
+            details={
+                "attempt": attempt,
+                "max_attempts": max_attempts,
+                "browser_impersonate": account.browser_impersonate,
+            },
+        )
+        user_info_result = self.bigmodel_client.get_customer_info(account, session)
+        user_info = self._ensure_dict(user_info_result.data, label="getCustomerInfo.data")
+        organizations = self._extract_organizations(user_info)
+        org_id, project_id = self._choose_org_and_project(
+            organizations=organizations,
+            preferred_org_id=account.org_id or session.org_id,
+            preferred_project_id=account.project_id or session.project_id,
+        )
 
-            products = self.load_products(
-                account_id,
-                invitation_code=account.invitation_code,
-                account=account,
-                session=session,
-                flow=flow,
+        session.org_id = org_id
+        session.project_id = project_id
+        session.customer_number = str(user_info.get("customerNumber") or "")
+        session.customer_name = str(user_info.get("customerName") or "")
+        session.user_info = user_info
+        session.organizations = organizations
+
+        if not session.customer_number:
+            raise UpstreamRequestError(
+                "getCustomerInfo 没返回 customerNumber，后面 create-sign 根本没法拼。",
+                details={"payload": user_info_result.raw},
             )
-            session.products = products
-            if not session.selected_product_id:
-                session.selected_product_id = DEFAULT_PRODUCT_ID
-            self.state_service.save_session(session)
-            account = self.state_service.get_account(account_id)
-            account.account_status = "valid"
-            account.account_status_message = "同步上下文和套餐成功"
-            account.account_checked_at = utc_now_iso()
-            self.state_service.update_account(account)
-            detail = self.state_service.get_account_detail(account_id)
-            if own_flow:
-                self.runtime_logs.finish_run(
-                    flow,
-                    status="success",
-                    message="账号同步完成",
-                    details={
-                        "product_count": len(products),
-                        "selected_product_id": detail.session.selected_product_id,
-                        "purchase_mode": detail.session.purchase_mode,
-                    },
-                )
-            return detail
-        except Exception as exc:
-            account = self.state_service.get_account(account_id)
-            account.account_status = "error"
-            account.account_status_message = str(exc)
-            account.account_checked_at = utc_now_iso()
-            self.state_service.update_account(account)
-            if own_flow:
-                self.runtime_logs.finish_run(
-                    flow,
-                    status="failed",
-                    message=f"账号同步失败：{exc}",
-                    details={"error": exc.__class__.__name__},
-                    level=logging.ERROR,
-                )
-            raise
+
+        self.runtime_logs.log_event(
+            flow,
+            stage="get_customer_info",
+            status="success",
+            message="账号上下文同步成功",
+            details={
+                "customer_number": session.customer_number,
+                "customer_name": session.customer_name,
+                "org_id": org_id,
+                "project_id": project_id,
+                "organization_count": len(organizations),
+            },
+        )
+
+        account.org_id = org_id
+        account.project_id = project_id
+        account.last_bootstrap_at = utc_now_iso()
+        self.state_service.update_account(account)
+
+        products = self.load_products(
+            account_id,
+            invitation_code=account.invitation_code,
+            account=account,
+            session=session,
+            flow=flow,
+        )
+        session.products = products
+        if not session.selected_product_id:
+            session.selected_product_id = DEFAULT_PRODUCT_ID
+        self.state_service.save_session(session)
+        account = self.state_service.get_account(account_id)
+        account.account_status = "valid"
+        account.account_status_message = "同步上下文和套餐成功"
+        account.account_checked_at = utc_now_iso()
+        self.state_service.update_account(account)
+        return self.state_service.get_account_detail(account_id)
 
     def load_products(
         self,
