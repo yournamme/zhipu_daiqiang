@@ -747,8 +747,8 @@ class PaymentService:
                     flow,
                     stage="preview",
                     status="started",
-                    message=f"开始第 {preview_round} 轮 preview",
-                    details={"round": preview_round, "product_id": request.product_id},
+                    message=f"开始第 {preview_round} 轮 preview，将先获取验证码票据",
+                    details={"round": preview_round, "product_id": request.product_id, "captcha_required": True},
                 )
                 captcha_request = request if preview_round == 1 else request.model_copy(update={"ticket": None, "randstr": None})
                 ticket, randstr = self._resolve_or_solve_preview_captcha(account_id, session, captcha_request, flow=flow)
@@ -779,7 +779,7 @@ class PaymentService:
                         flow,
                         stage="preview",
                         status="retry",
-                        message="preview 请求失败，重新开始整条链路",
+                        message="preview 请求失败，下一轮将重新获取验证码票据并再次请求 preview",
                         details={"round": preview_round, "error": exc.message, "details": exc.details},
                         level=logging.WARNING,
                     )
@@ -859,7 +859,7 @@ class PaymentService:
                     flow,
                     stage="preview",
                     status="retry",
-                    message="preview 未拿到 bizId，重跑整条链路",
+                    message="preview 未拿到 bizId，下一轮将重新获取验证码票据并再次请求 preview",
                     details={
                         "round": preview_round,
                         "code": code,

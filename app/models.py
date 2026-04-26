@@ -72,6 +72,8 @@ class AccountRecord(BaseModel):
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
+    last_scheduled_run_key: str = ""
+    last_manual_run_at: str | None = None
     last_schedule_status: str = ""
     last_schedule_message: str = ""
     account_status: str = "unchecked"
@@ -98,6 +100,8 @@ class PublicAccountRecord(BaseModel):
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
+    last_scheduled_run_key: str = ""
+    last_manual_run_at: str | None = None
     last_schedule_status: str = ""
     last_schedule_message: str = ""
     account_status: str = "unchecked"

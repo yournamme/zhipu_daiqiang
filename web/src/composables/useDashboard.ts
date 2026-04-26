@@ -154,6 +154,10 @@ export function useDashboard() {
     await runAction(`run:${accountId}`, copy.feedback.paymentStarted, () => api.runAccount(accountId));
   }
 
+  async function probeAccount(accountId: string) {
+    await runAction(`probe:${accountId}`, copy.feedback.probeStarted, () => api.probeAccount(accountId));
+  }
+
   async function pauseAccount(accountId: string) {
     await runAction(`pause:${accountId}`, copy.feedback.pauseRequested, () => api.pauseAccount(accountId));
   }
@@ -171,6 +175,7 @@ export function useDashboard() {
     importAccount,
     loading,
     pauseAccount,
+    probeAccount,
     qrTotal,
     refreshDashboard,
     runningTotal,

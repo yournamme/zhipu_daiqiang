@@ -17,6 +17,7 @@ const emit = defineEmits<{
   sync: [accountId: string];
   delete: [accountId: string];
   run: [accountId: string];
+  probe: [accountId: string];
   pause: [accountId: string];
 }>();
 
@@ -127,6 +128,9 @@ function actionLoading(key: string, accountId: string, actionKey: string) {
               {{ detail.account.account_status || copy.table.unchecked }}
             </n-tag>
             <small>{{ detail.account.last_schedule_status || detail.account.account_status_message || copy.table.noRecentEvent }}</small>
+            <small v-if="detail.account.account_status_message" class="account-state-line">
+              {{ detail.account.account_status_message }}
+            </small>
             <small class="schedule-state-line">{{ copy.table.scheduleState }}: {{ scheduleStateText(detail) }}</small>
             <small v-if="isScheduleSuccess(detail) && latestTask(detail)?.biz_id" class="mono-line">
               {{ copy.table.bizId }}: {{ latestTask(detail)?.biz_id }}
@@ -144,6 +148,13 @@ function actionLoading(key: string, accountId: string, actionKey: string) {
               @click="isRunning(detail) ? emit('pause', detail.account.id) : emit('run', detail.account.id)"
             >
               {{ isRunning(detail) ? copy.table.pause : copy.table.run }}
+            </n-button>
+            <n-button
+              secondary
+              :loading="actionLoading('probe', detail.account.id, actionKey)"
+              @click="emit('probe', detail.account.id)"
+            >
+              {{ copy.table.probe }}
             </n-button>
             <n-button
               secondary

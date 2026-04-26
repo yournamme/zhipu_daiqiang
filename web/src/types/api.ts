@@ -17,6 +17,15 @@ export interface HealthPayload {
   [key: string]: unknown;
 }
 
+export interface RuntimeLogsPayload {
+  date: string;
+  path: string;
+  lines: string[];
+  text: string;
+  truncated?: boolean;
+  total?: number;
+}
+
 export interface ProductOffer {
   product_id: string;
   product_name: string;
@@ -49,6 +58,8 @@ export interface PublicAccountRecord {
   schedule_enabled?: boolean;
   scheduled_start_time?: string;
   last_scheduled_run_at?: string | null;
+  last_scheduled_run_key?: string;
+  last_manual_run_at?: string | null;
   last_schedule_status?: string;
   last_schedule_message?: string;
   account_status?: string;

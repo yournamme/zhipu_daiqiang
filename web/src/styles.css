@@ -325,6 +325,11 @@ textarea:focus-visible,
   font-weight: 600;
 }
 
+.account-state-line {
+  color: var(--desk-ink) !important;
+  font-weight: 700;
+}
+
 .link-button {
   width: fit-content;
   max-width: 100%;
@@ -458,6 +463,23 @@ textarea:focus-visible,
 .context-grid strong {
   color: var(--desk-ink);
   word-break: break-word;
+}
+
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--desk-muted);
+  font-size: 13px;
+}
+
+.runtime-log-viewer textarea {
+  min-height: calc(100vh - 150px) !important;
+  resize: none !important;
+  white-space: pre;
+  overflow-wrap: normal;
 }
 
 .json-view textarea,
