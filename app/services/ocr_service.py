@@ -7,6 +7,7 @@ import importlib.util
 import logging
 import multiprocessing
 import os
+import secrets
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -50,7 +51,9 @@ def _worker_initializer() -> None:
 def _warmup_worker(index: int) -> dict[str, Any]:
     _clear_proxy_env()
     _load_adapter_module().get_engine()
-    time.sleep(0.1)
+    # Keep warmup tasks alive briefly so ProcessPoolExecutor has a reason to
+    # spawn up to the requested worker count instead of reusing one hot process.
+    time.sleep(1.2)
     return {"index": index, "pid": os.getpid()}
 
 
@@ -76,10 +79,14 @@ class OcrService:
         self._executor: ProcessPoolExecutor | None = None
         self._executor_lock = threading.Lock()
         self._bootstrap_lock = threading.Lock()
+        self._capacity_lock = threading.RLock()
         self._engine_bootstrapped = False
+        self._active_demands: dict[str, int] = {}
+        self._warmed_worker_pids: set[int] = set()
 
     def status_payload(self) -> dict[str, Any]:
         missing = self._missing_dependencies()
+        active_demand, warmed_worker_pids = self._capacity_snapshot()
         return {
             "enabled": self.settings.tencent_ocr_enabled,
             "adapter": "local-tenvision-process-pool",
@@ -87,27 +94,69 @@ class OcrService:
             "missing_dependencies": missing,
             "include_debug": self.settings.tencent_ocr_include_debug,
             "workers": self.settings.tencent_ocr_workers,
+            "active_demand": active_demand,
+            "warmed_workers": len(warmed_worker_pids),
+            "warmed_worker_pids": sorted(warmed_worker_pids),
             "timeout_seconds": self.settings.tencent_ocr_timeout_seconds,
             "executor_ready": self._executor is not None,
             "engine_bootstrapped": self._engine_bootstrapped,
         }
 
-    def warmup(self) -> None:
+    def warmup(self, target_workers: int | None = None) -> None:
+        self.ensure_capacity(target_workers or 1)
+
+    def reserve_capacity(self, demand: int) -> dict[str, Any]:
+        normalized_demand = max(1, int(demand or 1))
+        lease_id = secrets.token_hex(8)
+        with self._capacity_lock:
+            self._active_demands[lease_id] = normalized_demand
+            active_demand = sum(self._active_demands.values())
+        capacity = self.ensure_capacity(active_demand)
+        return {
+            **capacity,
+            "lease_id": lease_id,
+            "reserved_demand": normalized_demand,
+            "active_demand": active_demand,
+        }
+
+    def release_capacity(self, lease_id: str) -> dict[str, Any]:
+        if not lease_id:
+            return self.status_payload()
+        with self._capacity_lock:
+            self._active_demands.pop(lease_id, None)
+        return self.status_payload()
+
+    def ensure_capacity(self, requested_workers: int) -> dict[str, Any]:
         if not self.settings.tencent_ocr_enabled:
-            return
+            return self.status_payload()
         missing = self._missing_dependencies()
         if missing:
             raise BadRequestError(
                 "本地 OCR 依赖没装全，先运行 pip install -r requirements.txt，别让发动机缺缸还硬跑。",
                 details={"missing_dependencies": missing},
             )
-        self._bootstrap_engine_once()
-        executor = self._ensure_executor()
-        timeout = max(self.settings.tencent_ocr_timeout_seconds, 1)
-        # 首次启动先保证模型在主进程完整落地，再做单 worker 预热，
-        # 避免 Windows 下多个进程同时下载/加载同一个 onnx 文件导致文件占用和损坏竞争。
-        future = executor.submit(_warmup_worker, 0)
-        future.result(timeout=timeout)
+        target_workers = max(1, min(int(requested_workers or 1), max(1, self.settings.tencent_ocr_workers)))
+        with self._capacity_lock:
+            if len(self._warmed_worker_pids) >= target_workers:
+                return self.status_payload()
+            self._bootstrap_engine_once()
+            executor = self._ensure_executor()
+            timeout = max(self.settings.tencent_ocr_timeout_seconds, 1)
+            for _ in range(3):
+                missing_workers = target_workers - len(self._warmed_worker_pids)
+                if missing_workers <= 0:
+                    break
+                # Submit a full wave instead of only the missing count. If three
+                # workers are already hot and one more is needed, one tiny task
+                # would likely be consumed by an idle existing worker and never
+                # force the pool to spawn the fourth process.
+                futures = [executor.submit(_warmup_worker, index) for index in range(target_workers)]
+                for future in futures:
+                    result = future.result(timeout=timeout)
+                    pid = int(result.get("pid") or 0)
+                    if pid:
+                        self._warmed_worker_pids.add(pid)
+        return self.status_payload()
 
     def shutdown(self) -> None:
         with self._executor_lock:
@@ -115,6 +164,7 @@ class OcrService:
                 return
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
+            self._warmed_worker_pids.clear()
 
     def analyze_captcha_image(self, image_bytes: bytes, *, prompt_text: str) -> dict[str, Any]:
         if not self.settings.tencent_ocr_enabled:
@@ -190,6 +240,10 @@ class OcrService:
                 initializer=_worker_initializer,
             )
             return self._executor
+
+    def _capacity_snapshot(self) -> tuple[int, set[int]]:
+        with self._capacity_lock:
+            return sum(self._active_demands.values()), set(self._warmed_worker_pids)
 
     def _missing_dependencies(self) -> list[str]:
         return [name for name in OCR_DEPENDENCIES if importlib.util.find_spec(name) is None]

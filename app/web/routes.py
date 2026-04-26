@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import base64
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from app.config import get_settings
+from app.errors import NotFoundError
 from app.models import (
     AccountPreferencesRequest,
     AccountImportRequest,
@@ -192,9 +194,28 @@ def list_tasks(account_id: str):
     return success(payment_service.list_tasks(account_id))
 
 
+@router.get("/api/accounts/{account_id}/tasks/{task_id}/qr.png")
+def get_task_qr_image(account_id: str, task_id: str):
+    task = next((item for item in payment_service.list_tasks(account_id) if item.id == task_id), None)
+    if task is None or not task.qr_base64:
+        raise NotFoundError("二维码不存在", details={"account_id": account_id, "task_id": task_id})
+    return Response(
+        content=_decode_qr_base64(task.qr_base64),
+        media_type="image/png",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 def success(data: Any) -> dict[str, Any]:
     """Wrap success payloads consistently."""
     return {"ok": True, "data": data}
+
+
+def _decode_qr_base64(value: str) -> bytes:
+    payload = (value or "").strip()
+    if "," in payload:
+        payload = payload.split(",", 1)[1]
+    return base64.b64decode(payload)
 
 
 def _format_runtime_log_line(raw_line: str) -> str:

@@ -69,6 +69,7 @@ class AccountRecord(BaseModel):
     proxy_url: str = ""
     user_agent: str = ""
     browser_impersonate: str = ""
+    preview_concurrency: int = 1
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -97,6 +98,7 @@ class PublicAccountRecord(BaseModel):
     proxy_url: str = ""
     user_agent: str = ""
     browser_impersonate: str = ""
+    preview_concurrency: int = 1
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -246,8 +248,19 @@ class AccountPreferencesRequest(BaseModel):
 
     invitation_code: str | None = None
     selected_product_id: str | None = None
+    preview_concurrency: int | None = None
     schedule_enabled: bool | None = None
     scheduled_start_time: str | None = None
+
+    @field_validator("preview_concurrency")
+    @classmethod
+    def validate_preview_concurrency(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        normalized = int(value)
+        if normalized < 1 or normalized > 4:
+            raise ValueError("preview_concurrency 必须在 1 到 4 之间")
+        return normalized
 
     @field_validator("scheduled_start_time")
     @classmethod

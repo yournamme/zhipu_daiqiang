@@ -14,6 +14,7 @@ const emit = defineEmits<{
   openContext: [detail: AccountDetailResponse];
   selectProduct: [accountId: string, productId: string];
   updateSchedule: [accountId: string, enabled: boolean, time: string];
+  updatePreviewConcurrency: [accountId: string, value: number];
   sync: [accountId: string];
   delete: [accountId: string];
   run: [accountId: string];
@@ -58,6 +59,15 @@ function productOptions(detail: AccountDetailResponse) {
 
 function selectedProduct(detail: AccountDetailResponse) {
   return detail.session.selected_product_id || null;
+}
+
+function previewConcurrencyValue(detail: AccountDetailResponse) {
+  return Math.max(1, Math.min(4, Number(detail.account.preview_concurrency || 1)));
+}
+
+function updatePreviewConcurrency(accountId: string, raw: string | number | null) {
+  const value = Math.max(1, Math.min(4, Number(raw || 1)));
+  emit("updatePreviewConcurrency", accountId, value);
 }
 
 function displayMode(detail: AccountDetailResponse) {
@@ -115,12 +125,27 @@ function actionLoading(key: string, accountId: string, actionKey: string) {
           </section>
 
           <section class="ops-cell" role="cell">
-            <ScheduleEditor
-              :account-id="detail.account.id"
-              :enabled="Boolean(detail.account.schedule_enabled)"
-              :time="detail.account.scheduled_start_time || '00:00:00'"
-              @update="(id, enabled, time) => emit('updateSchedule', id, enabled, time)"
-            />
+            <div class="schedule-config">
+              <ScheduleEditor
+                :account-id="detail.account.id"
+                :enabled="Boolean(detail.account.schedule_enabled)"
+                :time="detail.account.scheduled_start_time || '00:00:00'"
+                @update="(id, enabled, time) => emit('updateSchedule', id, enabled, time)"
+              />
+              <label class="preview-race-control">
+                <span>{{ copy.table.previewConcurrency }}</span>
+                <select
+                  :value="previewConcurrencyValue(detail)"
+                  :aria-label="copy.table.previewConcurrency"
+                  @change="updatePreviewConcurrency(detail.account.id, ($event.target as HTMLSelectElement).value)"
+                >
+                  <option :value="1">1</option>
+                  <option :value="2">2</option>
+                  <option :value="3">3</option>
+                  <option :value="4">4</option>
+                </select>
+              </label>
+            </div>
           </section>
 
           <section class="ops-cell status-cell" role="cell">

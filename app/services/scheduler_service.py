@@ -246,6 +246,12 @@ class SchedulerService:
             account = self.state_service.get_account(account_id)
             stale_statuses = {"running", "pause_requested"}
             if str(account.last_schedule_status or "").lower() in stale_statuses:
+                latest_task = next(iter(self.state_service.list_tasks(account_id)), None)
+                if latest_task and latest_task.qr_base64:
+                    account.last_schedule_status = "success"
+                    account.last_schedule_message = f"生成二维码成功：{latest_task.biz_id}"
+                    self.state_service.update_account(account)
+                    return {"paused": False, "status": "success", "stale_cleared": True}
                 account.last_schedule_status = "paused"
                 account.last_schedule_message = "任务不在当前进程运行，已清理陈旧运行状态"
                 self.state_service.update_account(account)

@@ -55,6 +55,7 @@ export interface PublicAccountRecord {
   proxy_url?: string;
   user_agent?: string;
   browser_impersonate?: string;
+  preview_concurrency?: number;
   schedule_enabled?: boolean;
   scheduled_start_time?: string;
   last_scheduled_run_at?: string | null;
@@ -128,6 +129,7 @@ export interface AccountImportPayload {
 export interface AccountPreferencesPayload {
   invitation_code?: string | null;
   selected_product_id?: string | null;
+  preview_concurrency?: number | null;
   schedule_enabled?: boolean | null;
   scheduled_start_time?: string | null;
 }

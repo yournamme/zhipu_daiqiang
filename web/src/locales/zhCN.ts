@@ -44,6 +44,7 @@ export const zhCN = {
     pause: "暂停",
     probe: "测活",
     bizId: "bizId",
+    previewConcurrency: "Preview 并发",
     scheduleState: "定时",
     scheduleEnabled: "已启用",
     scheduleDisabled: "未启用",
@@ -95,6 +96,7 @@ export const zhCN = {
     paymentStarted: "支付流程已启动",
     probeStarted: "测活任务已启动",
     pauseRequested: "已请求暂停",
+    openQr: "打开二维码",
     qrGenerated: (label: string, bizId: string) =>
       `账号 ${label} 已生成支付二维码${bizId ? `，bizId: ${bizId}` : ""}`,
     qrGeneratedBatch: (count: number, labels: string) => `${count} 个账号已生成支付二维码：${labels}`

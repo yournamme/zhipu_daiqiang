@@ -70,6 +70,12 @@ async function updateSchedule(accountId: string, enabled: boolean, time: string)
   });
 }
 
+async function updatePreviewConcurrency(accountId: string, value: number) {
+  await dashboard.updatePreferences(accountId, {
+    preview_concurrency: value
+  });
+}
+
 async function openLogs() {
   showLogs.value = true;
   logLoading.value = true;
@@ -104,6 +110,7 @@ async function openLogs() {
         @open-context="openContext"
         @select-product="updateProduct"
         @update-schedule="updateSchedule"
+        @update-preview-concurrency="updatePreviewConcurrency"
         @sync="dashboard.syncAccount"
         @delete="dashboard.deleteAccount"
         @run="dashboard.runAccount"
