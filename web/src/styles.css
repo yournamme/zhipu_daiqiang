@@ -379,7 +379,8 @@ textarea:focus-visible,
   background: transparent;
 }
 
-.qr-cell img {
+.qr-cell .n-image,
+.qr-cell .n-image img {
   display: block;
   width: 280px;
   height: 280px;
@@ -388,6 +389,10 @@ textarea:focus-visible,
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+.qr-cell .n-image {
+  cursor: zoom-in;
 }
 
 .qr-empty {
