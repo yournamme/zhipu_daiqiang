@@ -36,8 +36,15 @@ def get_engine():
     if RapidOCR is None:
         raise RuntimeError('缺少 rapidocr 依赖，无法使用 catpcha_v2 识别算法。')
 
+    from app.config import get_settings
+
+    settings = get_settings()
+    onnx_threads = max(1, settings.tencent_ocr_onnx_threads)
+
     _engine = RapidOCR(
         params={
+            'EngineConfig.onnxruntime.intra_op_num_threads': onnx_threads,
+            'EngineConfig.onnxruntime.inter_op_num_threads': 1,
             'Det.engine_type': EngineType.ONNXRUNTIME,
             'Det.lang_type': LangDet.CH,
             'Det.model_type': ModelType.MOBILE,

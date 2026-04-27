@@ -79,7 +79,8 @@
 - 项目没有配置 `uvicorn --workers`，所以 Web 服务本身不是多 worker 部署
 - OCR 并发是独立进程池，不是 `uvicorn` worker
 - 多账号调度是单应用进程里多线程拉任务，真正重 CPU 的 OCR 再交给 OCR 进程池
-- 启动预热阶段会先预热基础 OCR worker；支付链路启动前会按前端 `Preview 并发` 配置和当前活跃任务需求继续预热
+- 服务启动阶段会按 `.env` 中的 `TENCENT_OCR_WORKERS` 一次性预热全部 OCR worker，避免首轮支付链路临时 spawn worker 拖慢识别
+- 支付链路启动前仍会按前端 `Preview 并发` 配置和当前活跃任务需求校验 OCR 容量，但不会超过 `TENCENT_OCR_WORKERS`
 - 真正运行时 OCR 并发上限由 `TENCENT_OCR_WORKERS` 控制
 
 `TENCENT_OCR_WORKERS` 是系统 OCR worker 最大数量，不配置时默认 `4`：
@@ -88,8 +89,8 @@
 
 举例：
 
-- `Preview 并发=4` 且 `TENCENT_OCR_WORKERS=4`，最多预热 4 个 OCR worker
-- 两个账号同时运行，账号 A `Preview 并发=3`，账号 B `Preview 并发=1`，活跃 OCR 需求为 `4`，最多预热 4 个 OCR worker
+- `Preview 并发=4` 且 `TENCENT_OCR_WORKERS=4`，服务启动时会直接预热 4 个 OCR worker
+- 两个账号同时运行，账号 A `Preview 并发=3`，账号 B `Preview 并发=1`，活跃 OCR 需求为 `4`，服务启动后已经有 4 个 OCR worker 可用
 - 如果活跃 OCR 需求为 `8`，但 `TENCENT_OCR_WORKERS=4`，仍然最多只跑 4 个 OCR worker，其余 OCR 请求排队
 
 如果你想强制单路 OCR，直接把：
@@ -408,6 +409,8 @@ TENCENT_OCR_ENABLED=1
 TENCENT_OCR_INCLUDE_DEBUG=0
 TENCENT_OCR_WORKERS=4
 TENCENT_OCR_TIMEOUT_SECONDS=6
+TENCENT_OCR_OPENCV_THREADS=1
+TENCENT_OCR_ONNX_THREADS=1
 RUNTIME_LOG_LEVEL=INFO
 RUNTIME_LOG_RETENTION_DAYS=7
 ```
@@ -439,8 +442,10 @@ RUNTIME_LOG_RETENTION_DAYS=7
 | `TENCENT_CAPTCHA_NODE` | `node` | 跑腾讯 TDC VM 时使用的 Node.js 命令 |
 | `TENCENT_OCR_ENABLED` | `1` | 是否启用本地 OCR；关闭后自动识别不可用 |
 | `TENCENT_OCR_INCLUDE_DEBUG` | `0` | 是否在 OCR 结果中附带调试图像 base64，开启后日志和响应会更重 |
-| `TENCENT_OCR_WORKERS` | `4` | 系统 OCR worker 最大数量；支付链路启动前会按活跃 `Preview 并发` 需求预热，但不会超过这个上限 |
+| `TENCENT_OCR_WORKERS` | `4` | 系统 OCR worker 数量和最大并发；服务启动时会按该值一次性预热全部 worker |
 | `TENCENT_OCR_TIMEOUT_SECONDS` | `6` | 单次 OCR worker 超时秒数 |
+| `TENCENT_OCR_OPENCV_THREADS` | `1` | 每个 OCR worker 内 OpenCV 线程数，建议保持 `1`，避免多进程并发时线程爆炸 |
+| `TENCENT_OCR_ONNX_THREADS` | `1` | 每个 OCR worker 内 ONNXRuntime 推理线程数，建议保持 `1`，多 worker 并发时更稳 |
 | `RUNTIME_LOG_LEVEL` | `INFO` | 正式运行日志级别 |
 | `RUNTIME_LOG_RETENTION_DAYS` | `7` | `app.log` 按天轮转保留天数 |
 

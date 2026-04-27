@@ -38,6 +38,22 @@ def _clear_proxy_env() -> None:
         os.environ.pop(key, None)
 
 
+def _configure_worker_threads() -> None:
+    settings = get_settings()
+    opencv_threads = max(1, settings.tencent_ocr_opencv_threads)
+    onnx_threads = max(1, settings.tencent_ocr_onnx_threads)
+    os.environ.setdefault("OMP_NUM_THREADS", str(onnx_threads))
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", str(onnx_threads))
+    os.environ.setdefault("MKL_NUM_THREADS", str(onnx_threads))
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", str(onnx_threads))
+    try:
+        import cv2
+
+        cv2.setNumThreads(opencv_threads)
+    except Exception:
+        pass
+
+
 def _load_adapter_module():
     from app.services import tenvision_adapter
 
@@ -53,12 +69,14 @@ def _ignore_worker_sigint() -> None:
 
 def _worker_initializer() -> None:
     _ignore_worker_sigint()
+    _configure_worker_threads()
     _clear_proxy_env()
     _load_adapter_module().get_engine()
 
 
 def _warmup_worker(index: int) -> dict[str, Any]:
     _ignore_worker_sigint()
+    _configure_worker_threads()
     _clear_proxy_env()
     _load_adapter_module().get_engine()
     # Keep warmup tasks alive briefly so ProcessPoolExecutor has a reason to
@@ -69,6 +87,7 @@ def _warmup_worker(index: int) -> dict[str, Any]:
 
 def _worker_analyze(data: bytes, prompt_text: str, include_debug: bool) -> dict[str, Any]:
     _ignore_worker_sigint()
+    _configure_worker_threads()
     _clear_proxy_env()
     adapter = _load_adapter_module()
     started_at = time.perf_counter()
@@ -91,9 +110,12 @@ class OcrService:
         self._executor_lock = threading.Lock()
         self._bootstrap_lock = threading.Lock()
         self._capacity_lock = threading.RLock()
+        self._slot_lock = threading.Lock()
+        self._worker_slots = threading.BoundedSemaphore(max(1, self.settings.tencent_ocr_workers))
         self._engine_bootstrapped = False
         self._active_demands: dict[str, int] = {}
         self._warmed_worker_pids: set[int] = set()
+        self._inflight_workers = 0
 
     def status_payload(self) -> dict[str, Any]:
         missing = self._missing_dependencies()
@@ -106,6 +128,7 @@ class OcrService:
             "include_debug": self.settings.tencent_ocr_include_debug,
             "workers": self.settings.tencent_ocr_workers,
             "active_demand": active_demand,
+            "inflight_workers": self._inflight_snapshot(),
             "warmed_workers": len(warmed_worker_pids),
             "warmed_worker_pids": sorted(warmed_worker_pids),
             "timeout_seconds": self.settings.tencent_ocr_timeout_seconds,
@@ -114,7 +137,7 @@ class OcrService:
         }
 
     def warmup(self, target_workers: int | None = None) -> None:
-        self.ensure_capacity(target_workers or 1)
+        self.ensure_capacity(target_workers or self.settings.tencent_ocr_workers)
 
     def reserve_capacity(self, demand: int) -> dict[str, Any]:
         normalized_demand = max(1, int(demand or 1))
@@ -157,11 +180,21 @@ class OcrService:
                 missing_workers = target_workers - len(self._warmed_worker_pids)
                 if missing_workers <= 0:
                     break
-                # Submit a full wave instead of only the missing count. If three
-                # workers are already hot and one more is needed, one tiny task
-                # would likely be consumed by an idle existing worker and never
-                # force the pool to spawn the fourth process.
-                futures = [executor.submit(_warmup_worker, index) for index in range(target_workers)]
+                # During concurrent account runs, existing warmed workers are
+                # likely busy with real OCR work. Only fill the gap; otherwise
+                # warmup tasks can sit ahead of payment OCR jobs and trigger
+                # false timeouts. When idle, submit a full wave to force spawn.
+                inflight_workers = self._inflight_snapshot()
+                warmup_count = missing_workers if inflight_workers else target_workers
+                futures = [
+                    self._submit_with_worker_slot(
+                        executor,
+                        _warmup_worker,
+                        index,
+                        acquire_timeout=0.1 if inflight_workers else timeout,
+                    )
+                    for index in range(warmup_count)
+                ]
                 for future in futures:
                     result = future.result(timeout=timeout)
                     pid = int(result.get("pid") or 0)
@@ -176,6 +209,7 @@ class OcrService:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
             self._warmed_worker_pids.clear()
+            self._reset_worker_slots()
 
     def analyze_captcha_image(self, image_bytes: bytes, *, prompt_text: str) -> dict[str, Any]:
         if not self.settings.tencent_ocr_enabled:
@@ -193,7 +227,11 @@ class OcrService:
         except FuturesTimeoutError as exc:
             raise BadRequestError(
                 "验证码 OCR 识别超时",
-                details={"timeout_seconds": self.settings.tencent_ocr_timeout_seconds},
+                details={
+                    "timeout_seconds": self.settings.tencent_ocr_timeout_seconds,
+                    "workers": max(1, self.settings.tencent_ocr_workers),
+                    "inflight_workers": self._inflight_snapshot(),
+                },
             ) from exc
         except Exception as exc:
             raise BadRequestError("验证码 OCR 识别失败", details={"reason": str(exc)}) from exc
@@ -206,7 +244,8 @@ class OcrService:
         self._bootstrap_engine_once()
         for attempt in range(1, 3):
             executor = self._ensure_executor()
-            future = executor.submit(
+            future = self._submit_with_worker_slot(
+                executor,
                 _worker_analyze,
                 image_bytes,
                 payload_prompt,
@@ -255,6 +294,40 @@ class OcrService:
     def _capacity_snapshot(self) -> tuple[int, set[int]]:
         with self._capacity_lock:
             return sum(self._active_demands.values()), set(self._warmed_worker_pids)
+
+    def _submit_with_worker_slot(self, executor: ProcessPoolExecutor, fn, *args, acquire_timeout: float | None = None):
+        timeout = max(self.settings.tencent_ocr_timeout_seconds, 1) if acquire_timeout is None else acquire_timeout
+        acquired = self._worker_slots.acquire(timeout=timeout)
+        if not acquired:
+            raise FuturesTimeoutError()
+        self._mark_worker_inflight(1)
+        try:
+            future = executor.submit(fn, *args)
+        except Exception:
+            self._release_worker_slot()
+            raise
+        future.add_done_callback(lambda _future: self._release_worker_slot())
+        return future
+
+    def _mark_worker_inflight(self, delta: int) -> None:
+        with self._slot_lock:
+            self._inflight_workers = max(0, self._inflight_workers + delta)
+
+    def _release_worker_slot(self) -> None:
+        self._mark_worker_inflight(-1)
+        try:
+            self._worker_slots.release()
+        except ValueError:
+            logger.warning("OCR worker slot release ignored because semaphore is already full")
+
+    def _inflight_snapshot(self) -> int:
+        with self._slot_lock:
+            return self._inflight_workers
+
+    def _reset_worker_slots(self) -> None:
+        with self._slot_lock:
+            self._worker_slots = threading.BoundedSemaphore(max(1, self.settings.tencent_ocr_workers))
+            self._inflight_workers = 0
 
     def _missing_dependencies(self) -> list[str]:
         return [name for name in OCR_DEPENDENCIES if importlib.util.find_spec(name) is None]

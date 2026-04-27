@@ -745,8 +745,10 @@ class PaymentService:
                         flow,
                         stage="captcha_attempt",
                         status="retry",
-                        message="OCR 识别异常，刷新验证码重试",
-                        details={"attempt": attempt, "error": exc.message, "details": exc.details},
+                        message="OCR 识别超时，刷新验证码重试"
+                        if "超时" in exc.message
+                        else "OCR 识别异常，刷新验证码重试",
+                        details={"attempt": attempt, **(details or {}), "error": exc.message, "details": exc.details},
                         level=logging.WARNING,
                     )
                     if push_progress:
@@ -1114,6 +1116,7 @@ class PaymentService:
                 "preview_concurrency": normalized_concurrency,
                 "reserved_demand": capacity.get("reserved_demand"),
                 "active_demand": capacity.get("active_demand"),
+                "inflight_workers": capacity.get("inflight_workers"),
                 "workers_limit": capacity.get("workers"),
                 "warmed_workers": capacity.get("warmed_workers"),
                 "warmed_worker_pids": capacity.get("warmed_worker_pids"),
