@@ -59,6 +59,15 @@ def create_app() -> FastAPI:
                 details={"error": exc.__class__.__name__},
                 level=logging.WARNING,
             )
+        health = get_scheduler_service().payment_service.health_payload()
+        if health.get("status") != "ok":
+            runtime_logs.log_system_event(
+                stage="preflight",
+                status="failed",
+                message="运行前置依赖检查存在问题，请先处理后再启动任务",
+                details={"problems": health.get("problems") or [], "tdc": health.get("tdc"), "ocr": health.get("ocr")},
+                level=logging.ERROR,
+            )
         get_scheduler_service().start()
         runtime_logs.log_system_event(
             stage="startup",

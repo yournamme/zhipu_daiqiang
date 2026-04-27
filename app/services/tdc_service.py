@@ -58,11 +58,57 @@ class TencentTdcService:
         self.runner_path = PROJECT_ROOT / "app" / "services" / "tdc_vm_runner.cjs"
 
     def status_payload(self) -> dict[str, Any]:
+        runner_exists = self.runner_path.exists()
+        node_status = self._node_status_payload()
+        problems: list[str] = []
+        if not runner_exists:
+            problems.append("tdc_vm_runner.cjs 不存在")
+        if not node_status["available"]:
+            problems.append(str(node_status.get("message") or "Node.js 命令不可用"))
         return {
             "node": self.settings.tencent_captcha_node,
+            "node_resolved": node_status.get("resolved"),
+            "node_version": node_status.get("version"),
+            "available": runner_exists and bool(node_status["available"]),
+            "problems": problems,
             "runner": str(self.runner_path),
+            "runner_exists": runner_exists,
             "cache_dir": str(self.cache_dir),
         }
+
+    def _node_status_payload(self) -> dict[str, Any]:
+        node_command = self.settings.tencent_captcha_node
+        resolved = shutil.which(node_command) or node_command
+        try:
+            completed = subprocess.run(
+                [node_command, "-v"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=5,
+                check=False,
+            )
+        except FileNotFoundError:
+            return {
+                "available": False,
+                "resolved": resolved,
+                "message": f"Node.js 命令不可用：{node_command}",
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                "available": False,
+                "resolved": resolved,
+                "message": f"Node.js 命令超时：{node_command}",
+            }
+        version = (completed.stdout or completed.stderr or "").strip()
+        if completed.returncode != 0:
+            return {
+                "available": False,
+                "resolved": resolved,
+                "version": version,
+                "message": f"Node.js 版本检测失败：{version or completed.returncode}",
+            }
+        return {"available": True, "resolved": resolved, "version": version}
 
     def collect_for_challenge(
         self,
@@ -189,14 +235,24 @@ class TencentTdcService:
                 ),
                 encoding="utf-8",
             )
-            completed = subprocess.run(
-                [self.settings.tencent_captcha_node, str(self.runner_path), str(input_path)],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                timeout=max(self.settings.request_timeout_seconds, 5),
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    [self.settings.tencent_captcha_node, str(self.runner_path), str(input_path)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=max(self.settings.request_timeout_seconds, 5),
+                    check=False,
+                )
+            except FileNotFoundError as exc:
+                raise BadRequestError(
+                    "TDC VM 执行失败：Node.js 命令不可用，请检查 TENCENT_CAPTCHA_NODE 或系统 PATH",
+                    details={
+                        "node_command": self.settings.tencent_captcha_node,
+                        "runner_path": str(self.runner_path),
+                        "reason": str(exc),
+                    },
+                ) from exc
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

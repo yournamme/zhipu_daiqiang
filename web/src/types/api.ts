@@ -13,7 +13,9 @@ export interface ApiResponse<T> {
 }
 
 export interface HealthPayload {
+  status?: string;
   transport: string;
+  problems?: string[];
   [key: string]: unknown;
 }
 

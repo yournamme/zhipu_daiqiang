@@ -12,7 +12,8 @@ export const zhCN = {
     refreshLogs: "刷新日志",
     noLogs: "今天暂无运行日志",
     refresh: "刷新列表",
-    importAccount: "导入账号"
+    importAccount: "导入账号",
+    preflightFailed: (count: number) => `环境异常 ${count}`
   },
   stats: {
     ariaLabel: "控制台概览",

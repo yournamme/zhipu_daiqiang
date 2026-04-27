@@ -70,7 +70,7 @@ def get_today_logs(limit: int = Query(default=500, ge=1, le=2000)):
 
     raw_lines = log_path.read_text(encoding="utf-8").splitlines()
     selected_lines = raw_lines[-limit:]
-    formatted_lines = [_format_runtime_log_line(line) for line in selected_lines]
+    formatted_lines = [_format_runtime_log_line(line) for line in reversed(selected_lines)]
     return success(
         {
             "date": date_part,

@@ -8,6 +8,7 @@ import logging
 import multiprocessing
 import os
 import secrets
+import signal
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -43,12 +44,21 @@ def _load_adapter_module():
     return tenvision_adapter
 
 
+def _ignore_worker_sigint() -> None:
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        pass
+
+
 def _worker_initializer() -> None:
+    _ignore_worker_sigint()
     _clear_proxy_env()
     _load_adapter_module().get_engine()
 
 
 def _warmup_worker(index: int) -> dict[str, Any]:
+    _ignore_worker_sigint()
     _clear_proxy_env()
     _load_adapter_module().get_engine()
     # Keep warmup tasks alive briefly so ProcessPoolExecutor has a reason to
@@ -58,6 +68,7 @@ def _warmup_worker(index: int) -> dict[str, Any]:
 
 
 def _worker_analyze(data: bytes, prompt_text: str, include_debug: bool) -> dict[str, Any]:
+    _ignore_worker_sigint()
     _clear_proxy_env()
     adapter = _load_adapter_module()
     started_at = time.perf_counter()

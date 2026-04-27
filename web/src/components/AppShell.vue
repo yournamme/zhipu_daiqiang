@@ -1,10 +1,13 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { zhCN as copy } from "../locales/zhCN";
 import type { HealthPayload } from "../types/api";
 
-defineProps<{
+const props = defineProps<{
   health: HealthPayload | null;
 }>();
+
+const healthProblems = computed(() => props.health?.problems || []);
 
 const emit = defineEmits<{
   logs: [];
@@ -22,6 +25,14 @@ const emit = defineEmits<{
       </div>
       <div class="command-actions" :aria-label="copy.app.primaryActionsLabel">
         <n-tag round type="info">{{ health?.transport || copy.app.transportPending }}</n-tag>
+        <n-tooltip v-if="healthProblems.length" trigger="hover">
+          <template #trigger>
+            <n-tag round type="error">{{ copy.app.preflightFailed(healthProblems.length) }}</n-tag>
+          </template>
+          <div class="preflight-tooltip">
+            <div v-for="problem in healthProblems" :key="problem">{{ problem }}</div>
+          </div>
+        </n-tooltip>
         <n-button secondary @click="emit('logs')">{{ copy.app.viewLogs }}</n-button>
         <n-button secondary @click="emit('refresh')">{{ copy.app.refresh }}</n-button>
         <n-button type="primary" @click="emit('import')">{{ copy.app.importAccount }}</n-button>

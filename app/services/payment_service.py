@@ -112,11 +112,49 @@ class PaymentService:
         self.settings = get_settings()
 
     def health_payload(self) -> dict[str, Any]:
+        ocr_status = self.ocr_service.status_payload()
+        tdc_status = self.tdc_service.status_payload()
+        problems: list[str] = []
+        if not bool(ocr_status.get("available")):
+            missing = ocr_status.get("missing_dependencies") or []
+            problems.append(f"OCR 依赖不可用：{missing}")
+        if not bool(tdc_status.get("available")):
+            problems.extend(str(item) for item in (tdc_status.get("problems") or []))
         return {
-            "status": "ok",
+            "status": "ok" if not problems else "degraded",
+            "problems": problems,
             "transport": self.bigmodel_client.transport_name,
-            "ocr": self.ocr_service.status_payload(),
-            "tdc": self.tdc_service.status_payload(),
+            "ocr": ocr_status,
+            "tdc": tdc_status,
+        }
+
+    def _captcha_ticket_log_details(self, ticket: str, randstr: str) -> dict[str, Any]:
+        return {
+            "ticket_value": ticket,
+            "randstr_value": randstr,
+            "ticket_length": len(ticket or ""),
+            "randstr_length": len(randstr or ""),
+            "ticket_ready": bool(ticket),
+            "randstr_ready": bool(randstr),
+        }
+
+    def _preview_response_log_details(
+        self,
+        *,
+        raw: dict[str, Any],
+        ticket: str,
+        randstr: str,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
+        return {
+            **(extra or {}),
+            **self._captcha_ticket_log_details(ticket, randstr),
+            "code": raw.get("code"),
+            "msg": raw.get("msg") or raw.get("message") or "",
+            "biz_id": str(data.get("bizId") or "").strip(),
+            "sold_out": bool(data.get("soldOut")),
+            "preview_response": raw,
         }
 
     def list_accounts(self):
@@ -605,8 +643,8 @@ class PaymentService:
                     "ret": verify_result.ret,
                     "error_code": verify_result.error_code,
                     "error_message": verify_result.error_message,
-                    "ticket_ready": bool(verify_result.ticket),
-                    "randstr_ready": bool(verify_result.randstr),
+                    **self._captcha_ticket_log_details(verify_result.ticket, verify_result.randstr),
+                    "verify_response": verify_result.raw,
                 },
                 level=logging.INFO if verify_ok else logging.WARNING,
             )
@@ -920,10 +958,16 @@ class PaymentService:
                         preview_attempts.pop(0)
                     self.runtime_logs.log_event(
                         flow,
-                        stage="preview",
+                        stage="preview_response",
                         status="retry",
-                        message="preview 请求失败，下一轮将重新获取验证码票据并再次请求 preview",
-                        details={"round": preview_round, "error": exc.message, "details": exc.details},
+                        message="preview 请求异常，未拿到接口成功响应",
+                        details={
+                            "round": preview_round,
+                            "product_id": request.product_id,
+                            **self._captcha_ticket_log_details(ticket, randstr),
+                            "error": exc.message,
+                            "error_details": exc.details,
+                        },
                         level=logging.WARNING,
                     )
                     self._push_runtime_message(
@@ -937,6 +981,19 @@ class PaymentService:
                 data = result.data if isinstance(result.data, dict) else {}
 
                 biz_id = str(data.get("bizId") or "").strip()
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="preview_response",
+                    status="success" if code == 200 and biz_id else "failed",
+                    message="preview 接口响应已返回" if code == 200 and biz_id else "preview 接口响应未拿到 bizId",
+                    details=self._preview_response_log_details(
+                        raw=raw,
+                        ticket=ticket,
+                        randstr=randstr,
+                        extra={"round": preview_round, "product_id": request.product_id},
+                    ),
+                    level=logging.INFO if code == 200 and biz_id else logging.WARNING,
+                )
                 attempt_info = {
                     "round": preview_round,
                     "code": code,
@@ -1131,7 +1188,16 @@ class PaymentService:
                                     item.cancel()
                         continue
                     except Exception as exc:
-                        errors.append(str(exc))
+                        error_message = str(exc)
+                        errors.append(error_message)
+                        self.runtime_logs.log_event(
+                            flow,
+                            stage="preview_race",
+                            status="failed",
+                            message=f"preview 竞速子任务失败：{error_message}",
+                            details={"error": exc.__class__.__name__, "message": error_message},
+                            level=logging.WARNING,
+                        )
                         continue
                     stop_event.set()
                     for item in futures:
@@ -1147,7 +1213,7 @@ class PaymentService:
                     raise paused_error
                 message = errors[-1] if errors else "preview 竞速没有拿到 bizId"
                 raise UpstreamRequestError(
-                    "preview 竞速失败，所有并发任务都未拿到 bizId",
+                    f"preview 竞速失败，所有并发任务都未拿到 bizId：{message}",
                     details={"concurrency": normalized_concurrency, "last_error": message, "errors": errors[-6:]},
                 )
 
@@ -1249,6 +1315,21 @@ class PaymentService:
             code = raw.get("code")
             data = result.data if isinstance(result.data, dict) else {}
             biz_id = str(data.get("bizId") or "").strip()
+            self.runtime_logs.log_event(
+                flow,
+                stage="preview_response",
+                status="success" if code == 200 and biz_id else "failed",
+                message=f"preview 竞速 lane {lane} 接口响应已返回"
+                if code == 200 and biz_id
+                else f"preview 竞速 lane {lane} 接口响应未拿到 bizId",
+                details=self._preview_response_log_details(
+                    raw=raw,
+                    ticket=ticket,
+                    randstr=randstr,
+                    extra={"lane": lane, "round": round_no, "race": True, "product_id": request.product_id},
+                ),
+                level=logging.INFO if code == 200 and biz_id else logging.WARNING,
+            )
             if code == 200 and biz_id:
                 stop_event.set()
                 preview = PreviewResult(
