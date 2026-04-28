@@ -726,6 +726,8 @@ class PaymentService:
                         details={"attempt": attempt, **(details or {})},
                     )
                 except GlmDeskError as exc:
+                    if not self._is_retryable_flow_error(exc):
+                        raise
                     result = {
                         "attempt": attempt,
                         "challenge": None,
@@ -747,14 +749,14 @@ class PaymentService:
                         status="retry",
                         message="OCR 识别超时，刷新验证码重试"
                         if "超时" in exc.message
-                        else "OCR 识别异常，刷新验证码重试",
+                        else "验证码 challenge/OCR 异常，刷新验证码重试",
                         details={"attempt": attempt, **(details or {}), "error": exc.message, "details": exc.details},
                         level=logging.WARNING,
                     )
                     if push_progress:
                         self._push_runtime_message(
                             account_id,
-                            f"验证码 OCR 异常，第 {attempt} 轮重试中",
+                            f"验证码 challenge/OCR 异常，第 {attempt} 轮重试中",
                         )
                     continue
                 ocr_gate = self._captcha_ocr_gate(challenge)
@@ -792,15 +794,48 @@ class PaymentService:
                 if stop_event is not None and stop_event.is_set():
                     raise RunPausedError("preview race 已有其他任务胜出")
 
-                verify = self._submit_captcha_verify_for_session(
-                    account_id,
-                    account,
-                    session,
-                    CaptchaVerifyPayloadRequest(),
-                    flow=flow,
-                    persist_session=persist_session,
-                    details={"attempt": attempt, **(details or {})},
-                )
+                try:
+                    verify = self._submit_captcha_verify_for_session(
+                        account_id,
+                        account,
+                        session,
+                        CaptchaVerifyPayloadRequest(),
+                        flow=flow,
+                        persist_session=persist_session,
+                        details={"attempt": attempt, **(details or {})},
+                    )
+                except GlmDeskError as exc:
+                    if not self._is_retryable_flow_error(exc):
+                        raise
+                    result = {
+                        "attempt": attempt,
+                        "challenge": challenge,
+                        "verify": {
+                            "skipped": True,
+                            "error_code": "VERIFY_FLOW_EXCEPTION",
+                            "error_message": exc.message,
+                            "details": exc.details,
+                        },
+                        "ticket": "",
+                        "randstr": "",
+                        "status": "verify_flow_exception",
+                    }
+                    attempts.append(result)
+                    last_result = result
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="captcha_verify",
+                        status="retry",
+                        message="验证码 verify 链路异常，刷新验证码重试",
+                        details={"attempt": attempt, **(details or {}), "error": exc.message, "details": exc.details},
+                        level=logging.WARNING,
+                    )
+                    if push_progress:
+                        self._push_runtime_message(
+                            account_id,
+                            f"验证码 verify 链路异常，第 {attempt} 轮重试中",
+                        )
+                    continue
                 if stop_event is not None and stop_event.is_set():
                     raise RunPausedError("preview race 已有其他任务胜出")
                 error_code = str(verify.get("error_code") or "")
@@ -934,7 +969,40 @@ class PaymentService:
                     details={"round": preview_round, "product_id": request.product_id, "captcha_required": True},
                 )
                 captcha_request = request if preview_round == 1 else request.model_copy(update={"ticket": None, "randstr": None})
-                ticket, randstr = self._resolve_or_solve_preview_captcha(account_id, session, captcha_request, flow=flow)
+                try:
+                    ticket, randstr = self._resolve_or_solve_preview_captcha(account_id, session, captcha_request, flow=flow)
+                except UpstreamRequestError as exc:
+                    preview_attempts.append(
+                        {
+                            "round": preview_round,
+                            "code": None,
+                            "biz_id": None,
+                            "sold_out": None,
+                            "msg": exc.message,
+                            "ticket": "",
+                        }
+                    )
+                    if len(preview_attempts) > 100:
+                        preview_attempts.pop(0)
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="preview",
+                        status="retry",
+                        message="preview 验证码票据获取异常，下一轮重新获取并重试",
+                        details={
+                            "round": preview_round,
+                            "product_id": request.product_id,
+                            "error": exc.message,
+                            "error_details": exc.details,
+                        },
+                        level=logging.WARNING,
+                    )
+                    self._push_runtime_message(
+                        account_id,
+                        f"preview 验证码异常，第 {preview_round} 轮重试中",
+                    )
+                    session = self.state_service.load_session(account_id)
+                    continue
 
                 try:
                     result = self.bigmodel_client.preview_payment(
@@ -1288,30 +1356,58 @@ class PaymentService:
                 message=f"preview 竞速 lane {lane} 开始第 {round_no} 轮",
                 details=details,
             )
-            solved = self._solve_captcha_for_session(
-                account_id,
-                account,
-                session,
-                flow=flow,
-                persist_session=False,
-                stop_event=stop_event,
-                details=details,
-                push_progress=False,
-            )
+            try:
+                solved = self._solve_captcha_for_session(
+                    account_id,
+                    account,
+                    session,
+                    flow=flow,
+                    persist_session=False,
+                    stop_event=stop_event,
+                    details=details,
+                    push_progress=False,
+                )
+            except UpstreamRequestError as exc:
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="preview_race",
+                    status="retry",
+                    message=f"preview 竞速 lane {lane} 验证码上游异常，继续重试",
+                    details={**details, "error": exc.message, "error_details": exc.details},
+                    level=logging.WARNING,
+                )
+                continue
             if stop_event.is_set():
                 raise RunPausedError("preview race 已有其他任务胜出")
             ticket = str(solved.get("ticket") or "")
             randstr = str(solved.get("randstr") or "")
             if not ticket or not randstr:
                 continue
-            result = self.bigmodel_client.preview_payment(
-                account,
-                session,
-                request,
-                invitation_code=invitation,
-                ticket=ticket,
-                randstr=randstr,
-            )
+            try:
+                result = self.bigmodel_client.preview_payment(
+                    account,
+                    session,
+                    request,
+                    invitation_code=invitation,
+                    ticket=ticket,
+                    randstr=randstr,
+                )
+            except UpstreamRequestError as exc:
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="preview_response",
+                    status="retry",
+                    message=f"preview 竞速 lane {lane} 请求上游异常，继续重试",
+                    details={
+                        **details,
+                        "product_id": request.product_id,
+                        **self._captcha_ticket_log_details(ticket, randstr),
+                        "error": exc.message,
+                        "error_details": exc.details,
+                    },
+                    level=logging.WARNING,
+                )
+                continue
             if stop_event.is_set():
                 raise RunPausedError("preview race 已有其他任务胜出")
             raw = result.raw
@@ -1928,6 +2024,42 @@ class PaymentService:
             }
         )
         return hydrated, result.to_payload()
+
+    def _is_retryable_flow_error(self, exc: GlmDeskError) -> bool:
+        """Return whether a captcha/preview failure is safe to retry inside the same flow."""
+        if isinstance(exc, UpstreamRequestError):
+            return True
+        if not isinstance(exc, BadRequestError):
+            return False
+
+        message = exc.message
+        hard_markers = (
+            "Node.js 命令不可用",
+            "TDC VM runner 不存在",
+            "账号缺少 token",
+            "缺少 token",
+            "缺少 product_id",
+            "请先选择套餐",
+            "请先调用 preview",
+            "升级签单缺少",
+            "本地 OCR 已关闭",
+            "本地 OCR 依赖没装全",
+        )
+        if any(marker in message for marker in hard_markers):
+            return False
+
+        retryable_markers = (
+            "TDC VM 执行失败",
+            "TDC VM 输出不是合法 JSON",
+            "TDC VM 没产出 collect/eks",
+            "challenge 里没有 tdc_path",
+            "tdc.js 内容看着不对劲",
+            "缺少 challenge sess",
+            "缺少点击点位",
+            "验证码 OCR 识别超时",
+            "验证码 OCR 识别失败",
+        )
+        return any(marker in message for marker in retryable_markers)
 
     def _ensure_context(self, account_id: str) -> tuple[AccountRecord, AccountSessionState]:
         account = self.state_service.get_account(account_id)
