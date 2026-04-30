@@ -2106,7 +2106,10 @@ class PaymentService:
             ticket_pool_size = current_account.ticket_pool_size
 
             if ticket_pool_size > 0:
-                # Pool mode: pre-collect N tickets, then drain them into /preview one by one
+                # Pool mode: pre-collect N tickets, then drain them into /preview one by one.
+                # The pool is used ONLY for the first attempt; if all tickets are exhausted
+                # without a bizId, _run_pool_preview falls back internally to
+                # race_preview_payment — no exception escapes this branch.
                 deadline_time = (
                     current_account.preview_concurrency_time
                     if current_account.preview_concurrency_time_enabled
@@ -2181,88 +2184,99 @@ class PaymentService:
     ) -> PreviewResult:
         """Fill the ticket pool then drain it one-by-one against /preview.
 
-        Loops automatically when all pool tickets are exhausted without a bizId.
+        Executes only **once** — does NOT loop on exhaustion.
+        If all pool tickets are consumed without a bizId, falls back directly
+        to ``race_preview_payment`` without raising, so the caller's chain
+        is never interrupted by the pool exhaustion case.
         """
-        while True:
-            self._ensure_not_paused(account_id)
-            current_account, session = self._ensure_context(account_id)
+        self._ensure_not_paused(account_id)
+        current_account, session = self._ensure_context(account_id)
 
-            # Step 1: fill until we have ticket_pool_size unused entries
-            session = self._fill_ticket_pool(
+        # Step 1: fill until we have ticket_pool_size unused entries
+        session = self._fill_ticket_pool(
+            account_id,
+            current_account,
+            session,
+            ticket_pool_size,
+            flow=flow,
+            deadline_time=deadline_time,
+        )
+
+        # Reload after fill — session was saved incrementally inside _fill_ticket_pool
+        current_account = self.state_service.get_account(account_id)
+        session = self.state_service.load_session(account_id)
+        invitation = current_account.invitation_code.strip()
+
+        # If deadline is configured and pool filled BEFORE the deadline,
+        # hold here until the deadline arrives so that drain fires exactly on time.
+        if deadline_time:
+            wait_secs = self._preview_concurrency_wait_seconds(deadline_time)
+            if wait_secs > 0:
+                unused_count = sum(1 for e in session.ticket_pool if not e.used)
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="ticket_pool_wait",
+                    status="waiting",
+                    message=f"ticket 池已满（{unused_count} 张），等待并发时间 {deadline_time}（剩余 {wait_secs:.1f} 秒）",
+                    details={"deadline": deadline_time, "wait_seconds": round(wait_secs, 3), "pool_collected": unused_count},
+                )
+                self._push_runtime_message(account_id, f"ticket 池已满，等待 {deadline_time} 开始抢购…")
+                while True:
+                    self._ensure_not_paused(account_id)
+                    remaining = self._preview_concurrency_wait_seconds(deadline_time)
+                    if remaining <= 0:
+                        break
+                    import time as _time
+                    _time.sleep(min(0.1, remaining))
+                self.runtime_logs.log_event(
+                    flow,
+                    stage="ticket_pool_wait",
+                    status="ready",
+                    message="并发时间到，开始消耗 ticket 池",
+                    details={"deadline": deadline_time, "pool_collected": unused_count},
+                )
+                self._push_runtime_message(account_id, "并发时间到，开始消耗 ticket 池抢购")
+
+        # Step 2: drain pool tickets into /preview until bizId is received.
+        # If all tickets are exhausted without success, fall back directly to
+        # race_preview_payment — no exception propagates out of this method.
+        try:
+            preview = self._drain_ticket_pool(
                 account_id,
                 current_account,
                 session,
-                ticket_pool_size,
+                PreviewPaymentRequest(product_id=product_id),
+                invitation,
                 flow=flow,
-                deadline_time=deadline_time,
+            )
+        except UpstreamRequestError as exc:
+            if "已耗尽" not in exc.message:
+                raise
+            self.runtime_logs.log_event(
+                flow,
+                stage="ticket_pool",
+                status="fallback",
+                message="ticket 池已耗尽未拿到 bizId，切换竞速模式继续抢购",
+                details={"pool_size": ticket_pool_size},
+                level=logging.WARNING,
+            )
+            self._push_runtime_message(account_id, "ticket 池已耗尽，切换竞速模式继续抢购…")
+            return self.race_preview_payment(
+                account_id,
+                PreviewPaymentRequest(product_id=product_id),
+                concurrency=current_account.preview_concurrency,
+                preview_concurrency_time=current_account.preview_concurrency_time
+                if current_account.preview_concurrency_time_enabled
+                else "",
+                flow=flow,
             )
 
-            # Reload after fill — session was saved incrementally inside _fill_ticket_pool
-            current_account = self.state_service.get_account(account_id)
-            session = self.state_service.load_session(account_id)
-            invitation = current_account.invitation_code.strip()
-
-            # If deadline is configured and pool filled BEFORE the deadline,
-            # hold here until the deadline arrives so that drain fires exactly on time.
-            if deadline_time:
-                wait_secs = self._preview_concurrency_wait_seconds(deadline_time)
-                if wait_secs > 0:
-                    unused_count = sum(1 for e in session.ticket_pool if not e.used)
-                    self.runtime_logs.log_event(
-                        flow,
-                        stage="ticket_pool_wait",
-                        status="waiting",
-                        message=f"ticket 池已满（{unused_count} 张），等待并发时间 {deadline_time}（剩余 {wait_secs:.1f} 秒）",
-                        details={"deadline": deadline_time, "wait_seconds": round(wait_secs, 3), "pool_collected": unused_count},
-                    )
-                    self._push_runtime_message(account_id, f"ticket 池已满，等待 {deadline_time} 开始抢购…")
-                    while True:
-                        self._ensure_not_paused(account_id)
-                        remaining = self._preview_concurrency_wait_seconds(deadline_time)
-                        if remaining <= 0:
-                            break
-                        import time as _time
-                        _time.sleep(min(0.1, remaining))
-                    self.runtime_logs.log_event(
-                        flow,
-                        stage="ticket_pool_wait",
-                        status="ready",
-                        message=f"并发时间到，开始消耗 ticket 池",
-                        details={"deadline": deadline_time, "pool_collected": unused_count},
-                    )
-                    self._push_runtime_message(account_id, f"并发时间到，开始消耗 ticket 池抢购")
-
-            # Step 2: drain pool tickets into /preview until bizId is received
-            try:
-                preview = self._drain_ticket_pool(
-                    account_id,
-                    current_account,
-                    session,
-                    PreviewPaymentRequest(product_id=product_id),
-                    invitation,
-                    flow=flow,
-                )
-            except UpstreamRequestError as exc:
-                if "已耗尽" in exc.message:
-                    # All pre-collected tickets failed — refill and try again
-                    self.runtime_logs.log_event(
-                        flow,
-                        stage="ticket_pool",
-                        status="refill",
-                        message="ticket 池全部耗尽仍未拿到 bizId，重新填充再试",
-                        details={"pool_size": ticket_pool_size},
-                        level=logging.WARNING,
-                    )
-                    self._push_runtime_message(account_id, "ticket 池耗尽，重新填充中…")
-                    continue
-                raise
-
-            # Persist preview to session so create_qr can read it
-            session = self.state_service.load_session(account_id)
-            session.preview = preview
-            session.selected_product_id = product_id
-            self.state_service.save_session(session)
-            return preview
+        # Persist preview to session so create_qr can read it
+        session = self.state_service.load_session(account_id)
+        session.preview = preview
+        session.selected_product_id = product_id
+        self.state_service.save_session(session)
+        return preview
 
     def _ensure_not_paused(self, account_id: str) -> None:
         from app.services.scheduler_service import get_scheduler_service
