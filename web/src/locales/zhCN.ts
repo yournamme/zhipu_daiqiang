@@ -46,6 +46,8 @@ export const zhCN = {
     probe: "测活",
     bizId: "bizId",
     previewConcurrency: "Preview 并发",
+    previewConcurrencyTime: "并发时间",
+    previewConcurrencyTimeEnableLabel: "启用并发时间",
     scheduleState: "定时",
     scheduleEnabled: "已启用",
     scheduleDisabled: "未启用",

@@ -116,6 +116,8 @@ class AccountStateService:
                 user_agent=request.user_agent.strip(),
                 browser_impersonate=browser_impersonate,
                 preview_concurrency=_clamp_preview_concurrency(existing.get("preview_concurrency") if existing else 1),
+                preview_concurrency_time_enabled=bool(existing.get("preview_concurrency_time_enabled")) if existing else False,
+                preview_concurrency_time=str(existing.get("preview_concurrency_time") or "") if existing else "",
                 schedule_enabled=bool(existing.get("schedule_enabled")) if existing else False,
                 scheduled_start_time=str(existing.get("scheduled_start_time") or DEFAULT_SCHEDULED_START_TIME) if existing else DEFAULT_SCHEDULED_START_TIME,
                 last_scheduled_run_at=existing.get("last_scheduled_run_at") if existing else None,
@@ -160,6 +162,9 @@ class AccountStateService:
                 "has_cookie_header": bool(account.cookie_header),
                 "schedule_enabled": account.schedule_enabled,
                 "scheduled_start_time": account.scheduled_start_time,
+                "preview_concurrency": account.preview_concurrency,
+                "preview_concurrency_time_enabled": account.preview_concurrency_time_enabled,
+                "preview_concurrency_time": account.preview_concurrency_time,
             },
         )
         return self.to_public_account(account)
@@ -255,6 +260,10 @@ class AccountStateService:
             session.selected_product_id = request.selected_product_id.strip()
         if request.preview_concurrency is not None:
             account.preview_concurrency = _clamp_preview_concurrency(request.preview_concurrency)
+        if request.preview_concurrency_time_enabled is not None:
+            account.preview_concurrency_time_enabled = bool(request.preview_concurrency_time_enabled)
+        if request.preview_concurrency_time is not None:
+            account.preview_concurrency_time = request.preview_concurrency_time.strip()
         if self._should_skip_today_after_schedule_update(
             account=account,
             previous_schedule_enabled=previous_schedule_enabled,
@@ -399,6 +408,8 @@ class AccountStateService:
             user_agent=account.user_agent,
             browser_impersonate=resolve_browser_impersonate(account.browser_impersonate),
             preview_concurrency=account.preview_concurrency,
+            preview_concurrency_time_enabled=account.preview_concurrency_time_enabled,
+            preview_concurrency_time=account.preview_concurrency_time,
             schedule_enabled=account.schedule_enabled,
             scheduled_start_time=account.scheduled_start_time,
             last_scheduled_run_at=account.last_scheduled_run_at,

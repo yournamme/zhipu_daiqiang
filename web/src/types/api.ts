@@ -58,6 +58,8 @@ export interface PublicAccountRecord {
   user_agent?: string;
   browser_impersonate?: string;
   preview_concurrency?: number;
+  preview_concurrency_time_enabled?: boolean;
+  preview_concurrency_time?: string;
   schedule_enabled?: boolean;
   scheduled_start_time?: string;
   last_scheduled_run_at?: string | null;
@@ -132,6 +134,8 @@ export interface AccountPreferencesPayload {
   invitation_code?: string | null;
   selected_product_id?: string | null;
   preview_concurrency?: number | null;
+  preview_concurrency_time_enabled?: boolean | null;
+  preview_concurrency_time?: string | null;
   schedule_enabled?: boolean | null;
   scheduled_start_time?: string | null;
 }

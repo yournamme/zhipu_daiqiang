@@ -15,6 +15,8 @@ const emit = defineEmits<{
   selectProduct: [accountId: string, productId: string];
   updateSchedule: [accountId: string, enabled: boolean, time: string];
   updatePreviewConcurrency: [accountId: string, value: number];
+  updatePreviewConcurrencyTimeEnabled: [accountId: string, enabled: boolean, time: string];
+  updatePreviewConcurrencyTime: [accountId: string, time: string];
   sync: [accountId: string];
   delete: [accountId: string];
   run: [accountId: string];
@@ -68,6 +70,23 @@ function previewConcurrencyValue(detail: AccountDetailResponse) {
 function updatePreviewConcurrency(accountId: string, raw: string | number | null) {
   const value = Math.max(1, Math.min(4, Number(raw || 1)));
   emit("updatePreviewConcurrency", accountId, value);
+}
+
+function previewConcurrencyTimeValue(detail: AccountDetailResponse) {
+  return detail.account.preview_concurrency_time || "10:00:00";
+}
+
+function previewConcurrencyTimeEnabled(detail: AccountDetailResponse) {
+  return Boolean(detail.account.preview_concurrency_time_enabled);
+}
+
+function updatePreviewConcurrencyTimeEnabled(detail: AccountDetailResponse, enabled: boolean) {
+  emit("updatePreviewConcurrencyTimeEnabled", detail.account.id, enabled, previewConcurrencyTimeValue(detail));
+}
+
+function updatePreviewConcurrencyTime(accountId: string, event: Event) {
+  const target = event.target as HTMLInputElement;
+  emit("updatePreviewConcurrencyTime", accountId, target.value || "10:00:00");
 }
 
 function displayMode(detail: AccountDetailResponse) {
@@ -145,6 +164,23 @@ function actionLoading(key: string, accountId: string, actionKey: string) {
                   <option :value="4">4</option>
                 </select>
               </label>
+              <div class="preview-race-time-editor">
+                <n-switch
+                  :value="previewConcurrencyTimeEnabled(detail)"
+                  :aria-label="copy.table.previewConcurrencyTimeEnableLabel"
+                  @update:value="updatePreviewConcurrencyTimeEnabled(detail, $event)"
+                />
+                <input
+                  v-if="!previewConcurrencyTimeEnabled(detail)"
+                  class="time-input"
+                  type="time"
+                  step="1"
+                  :value="previewConcurrencyTimeValue(detail)"
+                  :aria-label="copy.table.previewConcurrencyTime"
+                  @change="updatePreviewConcurrencyTime(detail.account.id, $event)"
+                />
+                <span v-else class="schedule-time-readonly">{{ previewConcurrencyTimeValue(detail) }}</span>
+              </div>
             </div>
           </section>
 

@@ -7,6 +7,7 @@ import concurrent.futures
 import logging
 import threading
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from functools import lru_cache
 from io import BytesIO
 from typing import Any
@@ -35,6 +36,7 @@ from app.models import (
 from app.runtime_logging import FlowRun, RuntimeLogService, get_runtime_log_service
 from app.services.account_state import (
     AccountStateService,
+    SCHEDULE_TZ,
     get_account_state_service,
     make_id,
     utc_now_iso,
@@ -156,6 +158,72 @@ class PaymentService:
             "sold_out": bool(data.get("soldOut")),
             "preview_response": raw,
         }
+
+    def _preview_concurrency_wait_seconds(self, target_time: str) -> float:
+        parts = target_time.split(":")
+        if len(parts) != 3:
+            return 0.0
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+            second = int(parts[2])
+        except ValueError:
+            return 0.0
+        now = datetime.now(SCHEDULE_TZ) if SCHEDULE_TZ is not None else datetime.now().astimezone()
+        target = now.replace(hour=hour, minute=minute, second=second, microsecond=0)
+        return max(0.0, (target - now).total_seconds())
+
+    def _wait_preview_concurrency_time(
+        self,
+        account_id: str,
+        *,
+        target_time: str,
+        lane: int,
+        round_no: int,
+        stop_event: threading.Event,
+        flow: FlowRun | None,
+        ticket: str,
+        randstr: str,
+    ) -> None:
+        wait_seconds = self._preview_concurrency_wait_seconds(target_time)
+        details = {
+            "lane": lane,
+            "round": round_no,
+            "race": True,
+            "preview_concurrency_time": target_time,
+            "wait_seconds": round(wait_seconds, 3),
+            **self._captcha_ticket_log_details(ticket, randstr),
+        }
+        if wait_seconds <= 0:
+            self.runtime_logs.log_event(
+                flow,
+                stage="preview_race_wait",
+                status="skipped",
+                message=f"preview 竞速 lane {lane} 并发时间已过，立即请求 preview",
+                details=details,
+            )
+            return
+
+        self.runtime_logs.log_event(
+            flow,
+            stage="preview_race_wait",
+            status="waiting",
+            message=f"preview 竞速 lane {lane} 已拿到 ticket，等待并发时间 {target_time}",
+            details=details,
+        )
+        remaining = wait_seconds
+        while remaining > 0:
+            if stop_event.wait(min(0.1, remaining)):
+                raise RunPausedError("preview race 已有其他任务胜出")
+            self._ensure_not_paused(account_id)
+            remaining = self._preview_concurrency_wait_seconds(target_time)
+        self.runtime_logs.log_event(
+            flow,
+            stage="preview_race_wait",
+            status="ready",
+            message=f"preview 竞速 lane {lane} 并发时间已到，开始请求 preview",
+            details={**details, "actual_wait_seconds": round(wait_seconds, 3)},
+        )
 
     def list_accounts(self):
         return self.state_service.list_accounts()
@@ -1161,16 +1229,18 @@ class PaymentService:
         request: PreviewPaymentRequest,
         *,
         concurrency: int = 1,
+        preview_concurrency_time: str = "",
         flow: FlowRun | None = None,
     ) -> PreviewResult:
         normalized_concurrency = max(1, min(4, int(concurrency or 1)))
+        preview_concurrency_time = (preview_concurrency_time or "").strip()
         own_flow = flow is None
         if own_flow:
             flow = self.runtime_logs.start_run(
                 account_id=account_id,
                 action="preview_payment_race",
                 product_id=request.product_id,
-                details={"concurrency": normalized_concurrency},
+                details={"concurrency": normalized_concurrency, "preview_concurrency_time": preview_concurrency_time},
             )
         capacity_lease_id = ""
         capacity = self.ocr_service.reserve_capacity(normalized_concurrency)
@@ -1209,7 +1279,12 @@ class PaymentService:
             stage="preview_race",
             status="started",
             message=f"preview 竞速启动，并发 {normalized_concurrency} 路",
-            details={"concurrency": normalized_concurrency, "product_id": request.product_id},
+            details={
+                "concurrency": normalized_concurrency,
+                "product_id": request.product_id,
+                "preview_concurrency_time": preview_concurrency_time,
+                "preview_concurrency_wait_enabled": bool(preview_concurrency_time),
+            },
         )
         self._push_runtime_message(
             account_id,
@@ -1231,6 +1306,7 @@ class PaymentService:
                         invitation,
                         lane,
                         stop_event,
+                        preview_concurrency_time,
                         flow,
                     )
                     for lane in range(1, normalized_concurrency + 1)
@@ -1341,10 +1417,12 @@ class PaymentService:
         invitation: str,
         lane: int,
         stop_event: threading.Event,
+        preview_concurrency_time: str,
         flow: FlowRun | None,
     ) -> PreviewRaceWinner:
         session = base_session.model_copy(deep=True)
         round_no = 0
+        preview_wait_used = False
         while not stop_event.is_set() and round_no < PREVIEW_RACE_MAX_ROUNDS:
             self._ensure_not_paused(account_id)
             round_no += 1
@@ -1383,6 +1461,18 @@ class PaymentService:
             randstr = str(solved.get("randstr") or "")
             if not ticket or not randstr:
                 continue
+            if preview_concurrency_time and not preview_wait_used:
+                self._wait_preview_concurrency_time(
+                    account_id,
+                    target_time=preview_concurrency_time,
+                    lane=lane,
+                    round_no=round_no,
+                    stop_event=stop_event,
+                    flow=flow,
+                    ticket=ticket,
+                    randstr=randstr,
+                )
+                preview_wait_used = True
             try:
                 result = self.bigmodel_client.preview_payment(
                     account,
@@ -1741,10 +1831,14 @@ class PaymentService:
                 account_id,
                 "任务已启动，正在准备支付链路",
             )
+            current_account = self.state_service.get_account(account_id)
             preview = self.race_preview_payment(
                 account_id,
                 PreviewPaymentRequest(product_id=selected_product_id),
-                concurrency=self.state_service.get_account(account_id).preview_concurrency,
+                concurrency=current_account.preview_concurrency,
+                preview_concurrency_time=current_account.preview_concurrency_time
+                if current_account.preview_concurrency_time_enabled
+                else "",
                 flow=flow,
             )
             task = self.create_qr(

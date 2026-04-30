@@ -76,6 +76,19 @@ async function updatePreviewConcurrency(accountId: string, value: number) {
   });
 }
 
+async function updatePreviewConcurrencyTime(accountId: string, time: string) {
+  await dashboard.updatePreferences(accountId, {
+    preview_concurrency_time: time
+  });
+}
+
+async function updatePreviewConcurrencyTimeEnabled(accountId: string, enabled: boolean, time: string) {
+  await dashboard.updatePreferences(accountId, {
+    preview_concurrency_time_enabled: enabled,
+    preview_concurrency_time: time
+  });
+}
+
 async function openLogs() {
   showLogs.value = true;
   logLoading.value = true;
@@ -111,6 +124,8 @@ async function openLogs() {
         @select-product="updateProduct"
         @update-schedule="updateSchedule"
         @update-preview-concurrency="updatePreviewConcurrency"
+        @update-preview-concurrency-time-enabled="updatePreviewConcurrencyTimeEnabled"
+        @update-preview-concurrency-time="updatePreviewConcurrencyTime"
         @sync="dashboard.syncAccount"
         @delete="dashboard.deleteAccount"
         @run="dashboard.runAccount"

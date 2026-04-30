@@ -70,6 +70,8 @@ class AccountRecord(BaseModel):
     user_agent: str = ""
     browser_impersonate: str = ""
     preview_concurrency: int = 1
+    preview_concurrency_time_enabled: bool = False
+    preview_concurrency_time: str = ""
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -99,6 +101,8 @@ class PublicAccountRecord(BaseModel):
     user_agent: str = ""
     browser_impersonate: str = ""
     preview_concurrency: int = 1
+    preview_concurrency_time_enabled: bool = False
+    preview_concurrency_time: str = ""
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -249,6 +253,8 @@ class AccountPreferencesRequest(BaseModel):
     invitation_code: str | None = None
     selected_product_id: str | None = None
     preview_concurrency: int | None = None
+    preview_concurrency_time_enabled: bool | None = None
+    preview_concurrency_time: str | None = None
     schedule_enabled: bool | None = None
     scheduled_start_time: str | None = None
 
@@ -265,20 +271,12 @@ class AccountPreferencesRequest(BaseModel):
     @field_validator("scheduled_start_time")
     @classmethod
     def validate_scheduled_start_time(cls, value: str | None) -> str | None:
-        normalized = (value or "").strip()
-        if not normalized:
-            return ""
-        parts = normalized.split(":")
-        if len(parts) not in (2, 3) or any(not part.isdigit() for part in parts):
-            raise ValueError("scheduled_start_time 必须是 HH:MM 或 HH:MM:SS")
-        hour = int(parts[0])
-        minute = int(parts[1])
-        second = int(parts[2]) if len(parts) == 3 else 0
-        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
-            raise ValueError("scheduled_start_time 必须是有效的 HH:MM 或 HH:MM:SS")
-        if second < 0 or second > 59:
-            raise ValueError("scheduled_start_time 秒数必须在 00 到 59 之间")
-        return f"{hour:02d}:{minute:02d}:{second:02d}"
+        return _normalize_hms(value, field_name="scheduled_start_time")
+
+    @field_validator("preview_concurrency_time")
+    @classmethod
+    def validate_preview_concurrency_time(cls, value: str | None) -> str | None:
+        return _normalize_hms(value, field_name="preview_concurrency_time")
 
 
 class CaptchaPoint(BaseModel):
@@ -347,3 +345,20 @@ class AccountDetailResponse(BaseModel):
     account: PublicAccountRecord
     session: AccountSessionState
     tasks: list[PaymentTaskRecord] = Field(default_factory=list)
+
+
+def _normalize_hms(value: str | None, *, field_name: str) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        return ""
+    parts = normalized.split(":")
+    if len(parts) not in (2, 3) or any(not part.isdigit() for part in parts):
+        raise ValueError(f"{field_name} 必须是 HH:MM 或 HH:MM:SS")
+    hour = int(parts[0])
+    minute = int(parts[1])
+    second = int(parts[2]) if len(parts) == 3 else 0
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise ValueError(f"{field_name} 必须是有效的 HH:MM 或 HH:MM:SS")
+    if second < 0 or second > 59:
+        raise ValueError(f"{field_name} 秒数必须在 00 到 59 之间")
+    return f"{hour:02d}:{minute:02d}:{second:02d}"
