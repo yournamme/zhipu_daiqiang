@@ -19,13 +19,6 @@ from app.config import PROJECT_ROOT, Settings, get_settings
 from app.errors import BadRequestError
 from app.models import AccountRecord
 
-DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
-
-
 @dataclass(frozen=True)
 class TdcCollectResult:
     """TDC output needed by cap_union_new_verify."""
@@ -171,6 +164,7 @@ class TencentTdcService:
             proxy_url=account.proxy_url or None,
             user_agent=user_agent or None,
             browser_impersonate=account.browser_impersonate or None,
+            sec_fetch_site="cross-site",
         )
         if "<html" in code[:500].lower() or len(code) < 1000:
             raise BadRequestError(
@@ -196,6 +190,7 @@ class TencentTdcService:
             proxy_url=account.proxy_url or None,
             user_agent=user_agent or None,
             browser_impersonate=account.browser_impersonate or None,
+            sec_fetch_site="cross-site",
         )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(code, encoding="utf-8")

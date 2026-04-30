@@ -13,7 +13,7 @@ export const zhCN = {
     noLogs: "今天暂无运行日志",
     refresh: "刷新列表",
     importAccount: "导入账号",
-    preflightFailed: (count: number) => `环境异常 ${count}`
+    preflightFailed: (count: number) => `环境异常 ${count}`,
   },
   stats: {
     ariaLabel: "控制台概览",
@@ -22,7 +22,7 @@ export const zhCN = {
     running: "运行中",
     runningHint: "正在运行或请求暂停的任务",
     qrReady: "二维码就绪",
-    qrReadyHint: "已有最新二维码的账号"
+    qrReadyHint: "已有最新二维码的账号",
   },
   table: {
     title: "账号工作台",
@@ -34,7 +34,7 @@ export const zhCN = {
       schedule: "定时",
       status: "状态",
       latestQr: "最新二维码",
-      actions: "操作"
+      actions: "操作",
     },
     empty: "还没有导入账号",
     browserPending: "浏览器指纹待同步",
@@ -56,8 +56,8 @@ export const zhCN = {
     deleteConfirm: "确定删除这个账号及其本地缓存吗？",
     modes: {
       newPurchase: "新购",
-      upgrade: "升级"
-    }
+      upgrade: "升级",
+    },
   },
   importModal: {
     title: "导入账号",
@@ -67,7 +67,7 @@ export const zhCN = {
     token: "bigmodel_token_production",
     tokenPlaceholder: "粘贴 token 值",
     cancel: "取消",
-    submit: "确认导入并同步"
+    submit: "确认导入并同步",
   },
   contextModal: {
     title: "账号上下文",
@@ -78,15 +78,24 @@ export const zhCN = {
     schedule: "定时任务",
     browser: "浏览器指纹",
     disabled: "未启用",
-    unchecked: "未检查"
+    unchecked: "未检查",
   },
   schedule: {
     enableLabel: "启用定时任务",
-    timeLabel: "定时启动时间"
+    timeLabel: "定时启动时间",
   },
   qr: {
     alt: "最新支付二维码",
-    empty: "暂无二维码"
+    empty: "暂无二维码",
+  },
+  ticketPool: {
+    enableLabel: "Ticket 池模式",
+    sizeLabel: "池大小",
+    sizeHint: "1-50：先收集指定数量的 ticket，到时间再集中发起 /preview 抢购",
+    off: "关闭",
+    status: (collected: number, target: number) =>
+      `${collected}/${target} 已就绪`,
+    clearPool: "清空",
   },
   feedback: {
     dashboardRefreshed: "列表已刷新",
@@ -102,6 +111,8 @@ export const zhCN = {
     openQr: "打开二维码",
     qrGenerated: (label: string, bizId: string) =>
       `账号 ${label} 已生成支付二维码${bizId ? `，bizId: ${bizId}` : ""}`,
-    qrGeneratedBatch: (count: number, labels: string) => `${count} 个账号已生成支付二维码：${labels}`
-  }
+    qrGeneratedBatch: (count: number, labels: string) =>
+      `${count} 个账号已生成支付二维码：${labels}`,
+    ticketPoolCleared: "Ticket 池已清空",
+  },
 } as const;

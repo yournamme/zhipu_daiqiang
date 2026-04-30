@@ -5,7 +5,7 @@ import type {
   AccountDetailResponse,
   AccountImportPayload,
   AccountPreferencesPayload,
-  HealthPayload
+  HealthPayload,
 } from "../types/api";
 
 export type BannerTone = "success" | "warning" | "error" | "info";
@@ -33,12 +33,22 @@ export function useDashboard() {
   const runningTotal = computed(
     () =>
       details.value.filter(({ account }) =>
-        ["running", "pause_requested"].includes(String(account.last_schedule_status || "").toLowerCase())
-      ).length
+        ["running", "pause_requested"].includes(
+          String(account.last_schedule_status || "").toLowerCase(),
+        ),
+      ).length,
   );
-  const qrTotal = computed(() => details.value.filter(({ tasks }) => Boolean(tasks?.[0]?.qr_base64)).length);
+  const qrTotal = computed(
+    () =>
+      details.value.filter(({ tasks }) => Boolean(tasks?.[0]?.qr_base64))
+        .length,
+  );
 
-  function setBanner(text: string, tone: BannerTone = "success", link?: { text: string; href: string }) {
+  function setBanner(
+    text: string,
+    tone: BannerTone = "success",
+    link?: { text: string; href: string },
+  ) {
     banner.value = { text, tone, linkText: link?.text, linkHref: link?.href };
   }
 
@@ -87,14 +97,23 @@ export function useDashboard() {
       return false;
     }
 
-    const labels = newQrDetails.map((detail) => detail.account.label || detail.account.id);
+    const labels = newQrDetails.map(
+      (detail) => detail.account.label || detail.account.id,
+    );
     const firstTask = newQrDetails[0]?.tasks?.[0];
     const text =
       newQrDetails.length === 1
         ? copy.feedback.qrGenerated(labels[0], firstTask?.biz_id || "")
-        : copy.feedback.qrGeneratedBatch(newQrDetails.length, labels.slice(0, 3).join("、"));
+        : copy.feedback.qrGeneratedBatch(
+            newQrDetails.length,
+            labels.slice(0, 3).join("、"),
+          );
     const qrUrl = newQrDetails.length === 1 ? qrImageUrl(newQrDetails[0]) : "";
-    setBanner(text, "warning", qrUrl ? { text: copy.feedback.openQr, href: qrUrl } : undefined);
+    setBanner(
+      text,
+      "warning",
+      qrUrl ? { text: copy.feedback.openQr, href: qrUrl } : undefined,
+    );
     return true;
   }
 
@@ -103,8 +122,13 @@ export function useDashboard() {
       loading.value = true;
     }
     try {
-      const [healthPayload, accounts] = await Promise.all([api.health(), api.listAccounts()]);
-      const detailPayloads = await Promise.all(accounts.map((account) => api.getAccount(account.id)));
+      const [healthPayload, accounts] = await Promise.all([
+        api.health(),
+        api.listAccounts(),
+      ]);
+      const detailPayloads = await Promise.all(
+        accounts.map((account) => api.getAccount(account.id)),
+      );
       health.value = healthPayload;
       details.value = detailPayloads;
       const qrReminderShown = applyQrGeneratedReminder(detailPayloads);
@@ -112,7 +136,12 @@ export function useDashboard() {
         setBanner(copy.feedback.dashboardRefreshed, "success");
       }
     } catch (error) {
-      setBanner(error instanceof Error ? error.message : copy.feedback.dashboardRefreshFailed, "error");
+      setBanner(
+        error instanceof Error
+          ? error.message
+          : copy.feedback.dashboardRefreshFailed,
+        "error",
+      );
     } finally {
       loading.value = false;
     }
@@ -132,45 +161,77 @@ export function useDashboard() {
     }
   }
 
-  async function runAction(key: string, successText: string, action: () => Promise<unknown>) {
+  async function runAction(
+    key: string,
+    successText: string,
+    action: () => Promise<unknown>,
+  ) {
     actionKey.value = key;
     try {
       await action();
       setBanner(successText, "success");
       await refreshDashboard(true);
     } catch (error) {
-      setBanner(error instanceof Error ? error.message : copy.feedback.operationFailed, "error");
+      setBanner(
+        error instanceof Error ? error.message : copy.feedback.operationFailed,
+        "error",
+      );
     } finally {
       actionKey.value = "";
     }
   }
 
   async function importAccount(payload: AccountImportPayload) {
-    await runAction("import", copy.feedback.accountImported, () => api.importAccount(payload));
+    await runAction("import", copy.feedback.accountImported, () =>
+      api.importAccount(payload),
+    );
   }
 
-  async function updatePreferences(accountId: string, payload: AccountPreferencesPayload) {
-    await runAction(`prefs:${accountId}`, copy.feedback.preferencesSaved, () => api.updateAccount(accountId, payload));
+  async function updatePreferences(
+    accountId: string,
+    payload: AccountPreferencesPayload,
+  ) {
+    await runAction(`prefs:${accountId}`, copy.feedback.preferencesSaved, () =>
+      api.updateAccount(accountId, payload),
+    );
   }
 
   async function syncAccount(accountId: string) {
-    await runAction(`sync:${accountId}`, copy.feedback.accountSynced, () => api.bootstrapAccount(accountId, true));
+    await runAction(`sync:${accountId}`, copy.feedback.accountSynced, () =>
+      api.bootstrapAccount(accountId, true),
+    );
   }
 
   async function deleteAccount(accountId: string) {
-    await runAction(`delete:${accountId}`, copy.feedback.accountDeleted, () => api.deleteAccount(accountId));
+    await runAction(`delete:${accountId}`, copy.feedback.accountDeleted, () =>
+      api.deleteAccount(accountId),
+    );
   }
 
   async function runAccount(accountId: string) {
-    await runAction(`run:${accountId}`, copy.feedback.paymentStarted, () => api.runAccount(accountId));
+    await runAction(`run:${accountId}`, copy.feedback.paymentStarted, () =>
+      api.runAccount(accountId),
+    );
   }
 
   async function probeAccount(accountId: string) {
-    await runAction(`probe:${accountId}`, copy.feedback.probeStarted, () => api.probeAccount(accountId));
+    await runAction(`probe:${accountId}`, copy.feedback.probeStarted, () =>
+      api.probeAccount(accountId),
+    );
   }
 
   async function pauseAccount(accountId: string) {
-    await runAction(`pause:${accountId}`, copy.feedback.pauseRequested, () => api.pauseAccount(accountId));
+    await runAction(`pause:${accountId}`, copy.feedback.pauseRequested, () =>
+      api.pauseAccount(accountId),
+    );
+  }
+
+  async function clearTicketPool(accountId: string) {
+    await runAction(
+      `clearpool:${accountId}`,
+      copy.feedback.ticketPoolCleared,
+      () => api.clearTicketPool(accountId),
+    );
   }
 
   onBeforeUnmount(stopPolling);
@@ -185,6 +246,7 @@ export function useDashboard() {
     health,
     importAccount,
     loading,
+    clearTicketPool,
     pauseAccount,
     probeAccount,
     qrTotal,
@@ -193,6 +255,6 @@ export function useDashboard() {
     runAccount,
     startPolling,
     syncAccount,
-    updatePreferences
+    updatePreferences,
   };
 }

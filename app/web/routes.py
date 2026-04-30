@@ -177,6 +177,16 @@ def probe_account_flow(account_id: str):
     return success(get_scheduler_service().start_account_flow(account_id, source="probe"))
 
 
+@router.get("/api/accounts/{account_id}/tickets")
+def get_ticket_pool(account_id: str):
+    return success(payment_service.get_ticket_pool(account_id))
+
+
+@router.delete("/api/accounts/{account_id}/tickets")
+def clear_ticket_pool(account_id: str):
+    return success(payment_service.clear_ticket_pool(account_id))
+
+
 @router.post("/api/accounts/{account_id}/pause")
 def pause_account_flow(account_id: str):
     from app.services.scheduler_service import get_scheduler_service

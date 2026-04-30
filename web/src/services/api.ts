@@ -5,7 +5,8 @@ import type {
   ApiResponse,
   HealthPayload,
   RuntimeLogsPayload,
-  PublicAccountRecord
+  PublicAccountRecord,
+  TicketPoolEntry,
 } from "../types/api";
 
 export class ApiClientError extends Error {
@@ -23,12 +24,17 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...(options.headers || {})
-    }
+      ...(options.headers || {}),
+    },
   });
-  const payload = (await response.json().catch(() => null)) as ApiResponse<T> | null;
+  const payload = (await response
+    .json()
+    .catch(() => null)) as ApiResponse<T> | null;
   if (!response.ok || !payload?.ok) {
-    throw new ApiClientError(payload?.error?.message || `HTTP ${response.status}`, payload?.error?.details);
+    throw new ApiClientError(
+      payload?.error?.message || `HTTP ${response.status}`,
+      payload?.error?.details,
+    );
   }
   return payload.data as T;
 }
@@ -37,36 +43,50 @@ export const api = {
   health: () => request<HealthPayload>("/healthz"),
   todayLogs: () => request<RuntimeLogsPayload>("/api/logs/today"),
   listAccounts: () => request<PublicAccountRecord[]>("/api/accounts"),
-  getAccount: (accountId: string) => request<AccountDetailResponse>(`/api/accounts/${encodeURIComponent(accountId)}`),
+  getAccount: (accountId: string) =>
+    request<AccountDetailResponse>(
+      `/api/accounts/${encodeURIComponent(accountId)}`,
+    ),
   importAccount: (payload: AccountImportPayload) =>
     request<AccountDetailResponse>("/api/accounts/import", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     }),
   deleteAccount: (accountId: string) =>
     request<unknown>(`/api/accounts/${encodeURIComponent(accountId)}`, {
-      method: "DELETE"
+      method: "DELETE",
     }),
   updateAccount: (accountId: string, payload: AccountPreferencesPayload) =>
-    request<AccountDetailResponse>(`/api/accounts/${encodeURIComponent(accountId)}`, {
-      method: "PATCH",
-      body: JSON.stringify(payload)
-    }),
+    request<AccountDetailResponse>(
+      `/api/accounts/${encodeURIComponent(accountId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ),
   bootstrapAccount: (accountId: string, refreshFingerprint = true) =>
     request<AccountDetailResponse>(
       `/api/accounts/${encodeURIComponent(accountId)}/bootstrap?refresh_fingerprint=${String(refreshFingerprint)}`,
-      { method: "POST" }
+      { method: "POST" },
     ),
   runAccount: (accountId: string) =>
     request<unknown>(`/api/accounts/${encodeURIComponent(accountId)}/run`, {
-      method: "POST"
+      method: "POST",
     }),
   probeAccount: (accountId: string) =>
     request<unknown>(`/api/accounts/${encodeURIComponent(accountId)}/probe`, {
-      method: "POST"
+      method: "POST",
     }),
   pauseAccount: (accountId: string) =>
     request<unknown>(`/api/accounts/${encodeURIComponent(accountId)}/pause`, {
-      method: "POST"
-    })
+      method: "POST",
+    }),
+  getTicketPool: (accountId: string) =>
+    request<{ pool: TicketPoolEntry[]; collected: number; target: number }>(
+      `/api/accounts/${encodeURIComponent(accountId)}/tickets`,
+    ),
+  clearTicketPool: (accountId: string) =>
+    request<unknown>(`/api/accounts/${encodeURIComponent(accountId)}/tickets`, {
+      method: "DELETE",
+    }),
 };

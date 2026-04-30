@@ -6,7 +6,12 @@ from typing import Any
 
 import httpx
 
-from app.browser_profiles import resolve_transport_impersonate
+from app.browser_profiles import (
+    AVAILABLE_BROWSER_PROFILES,
+    BrowserProfile,
+    resolve_browser_impersonate,
+    resolve_transport_impersonate,
+)
 from app.config import Settings, get_settings
 from app.errors import UpstreamRequestError
 
@@ -28,6 +33,10 @@ class FingerprintHttpClient:
             return f"curl-cffi:{self.settings.browser_impersonate}"
         return "httpx"
 
+    # ------------------------------------------------------------------
+    # Public request helpers
+    # ------------------------------------------------------------------
+
     def request_json(
         self,
         method: str,
@@ -41,8 +50,17 @@ class FingerprintHttpClient:
         proxy_url: str | None = None,
         user_agent: str | None = None,
         browser_impersonate: str | None = None,
+        sec_fetch_site: str = "same-origin",
     ) -> dict[str, Any] | list[Any] | str | int | float | bool | None:
-        merged_headers = self._build_headers(headers=headers, user_agent=user_agent)
+        has_body = json_body is not None or form_body is not None
+        merged_headers = self._build_headers(
+            method=method,
+            headers=headers,
+            user_agent=user_agent,
+            browser_impersonate=browser_impersonate,
+            has_body=has_body,
+            sec_fetch_site=sec_fetch_site,
+        )
         response = self._dispatch(
             method=method,
             url=url,
@@ -68,8 +86,17 @@ class FingerprintHttpClient:
         proxy_url: str | None = None,
         user_agent: str | None = None,
         browser_impersonate: str | None = None,
+        sec_fetch_site: str = "same-origin",
     ) -> str:
-        merged_headers = self._build_headers(headers=headers, user_agent=user_agent)
+        has_body = form_body is not None
+        merged_headers = self._build_headers(
+            method=method,
+            headers=headers,
+            user_agent=user_agent,
+            browser_impersonate=browser_impersonate,
+            has_body=has_body,
+            sec_fetch_site=sec_fetch_site,
+        )
         response = self._dispatch(
             method=method,
             url=url,
@@ -96,8 +123,17 @@ class FingerprintHttpClient:
         proxy_url: str | None = None,
         user_agent: str | None = None,
         browser_impersonate: str | None = None,
+        sec_fetch_site: str = "same-origin",
     ) -> bytes:
-        merged_headers = self._build_headers(headers=headers, user_agent=user_agent)
+        has_body = form_body is not None
+        merged_headers = self._build_headers(
+            method=method,
+            headers=headers,
+            user_agent=user_agent,
+            browser_impersonate=browser_impersonate,
+            has_body=has_body,
+            sec_fetch_site=sec_fetch_site,
+        )
         response = self._dispatch(
             method=method,
             url=url,
@@ -112,25 +148,131 @@ class FingerprintHttpClient:
         self._ensure_success(response=response, url=url)
         return bytes(getattr(response, "content", b""))
 
+    # ------------------------------------------------------------------
+    # Header construction
+    # ------------------------------------------------------------------
+
+    def _resolve_profile(self, browser_impersonate: str | None) -> BrowserProfile:
+        """Look up the BrowserProfile for a given impersonate string."""
+        profile_id = resolve_browser_impersonate(
+            browser_impersonate or self.settings.browser_impersonate
+        )
+        return AVAILABLE_BROWSER_PROFILES[profile_id]
+
+    @staticmethod
+    def _pop_header(d: dict[str, str], *names: str) -> str | None:
+        """Case-insensitive pop of the first matching key from a header dict."""
+        for name in names:
+            for key in list(d.keys()):
+                if key.lower() == name.lower():
+                    return d.pop(key)
+        return None
+
     def _build_headers(
         self,
         *,
+        method: str,
         headers: dict[str, str] | None,
         user_agent: str | None,
+        browser_impersonate: str | None,
+        has_body: bool = False,
+        sec_fetch_site: str = "same-origin",
     ) -> dict[str, str]:
-        merged = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": self.settings.default_language,
-            "Set-Language": self.settings.default_language,
-            "Content-Type": "application/json;charset=utf-8",
-            "Origin": self.settings.bigmodel_origin,
-            "Referer": self.settings.bigmodel_referer,
-        }
-        if user_agent:
-            merged["User-Agent"] = user_agent
-        if headers:
-            merged.update({key: value for key, value in headers.items() if value})
+        """Build a Chrome-compliant ordered header dict.
+
+        Header order follows Chrome's HTTP/2 frame ordering as captured via
+        packet inspection (Charles Proxy / Wireshark):
+
+        1. sec-ch-ua group (Chrome/Edge only – low-entropy Client Hints)
+        2. content-type (body requests only)
+        3. user-agent
+        4. accept
+        5. origin (body requests; or when caller provides it explicitly)
+        6. caller-provided custom headers (Authorization, X-Requested-With …)
+        7. sec-fetch-site / sec-fetch-mode / sec-fetch-dest
+        8. referer
+        9. accept-encoding
+        10. accept-language
+        11. priority  (Chrome/Edge 119+, XHR/fetch requests)
+        """
+        profile = self._resolve_profile(browser_impersonate)
+        ua = (user_agent or "").strip() or profile.user_agent
+
+        # Work on a mutable copy of caller headers; pop positionally-sensitive
+        # keys so we can place them at the right positions ourselves.
+        caller: dict[str, str] = {k: v for k, v in (headers or {}).items() if v}
+        pop = self._pop_header  # shorthand
+
+        accept       = pop(caller, "Accept")       or "application/json, text/plain, */*"
+        content_type = pop(caller, "Content-Type")
+        origin       = pop(caller, "Origin")
+        referer      = pop(caller, "Referer")      or self.settings.bigmodel_referer
+        accept_lang  = pop(caller, "Accept-Language") or self.settings.default_language
+
+        # Content-Type: only include when there is a request body.
+        # Callers may already provide a specific type (e.g. form-urlencoded).
+        if has_body and not content_type:
+            content_type = "application/json;charset=utf-8"
+
+        # Origin: browsers send it on body (POST/PUT …) requests.
+        if not origin and has_body:
+            origin = self.settings.bigmodel_origin
+
+        merged: dict[str, str] = {}
+
+        # ── 1. Chrome / Edge Client Hints (sec-ch-ua group) ──────────────
+        # These are "low-entropy" hints that Chrome sends by default on every
+        # HTTPS request without needing an Accept-CH response header.
+        # Firefox and Safari do NOT send these at all.
+        if profile.sec_ch_ua:
+            merged["sec-ch-ua"] = profile.sec_ch_ua
+            merged["sec-ch-ua-mobile"] = "?0"
+            merged["sec-ch-ua-platform"] = f'"{profile.sec_ch_ua_platform}"'
+
+        # ── 2. Content-Type ───────────────────────────────────────────────
+        if content_type:
+            merged["Content-Type"] = content_type
+
+        # ── 3. User-Agent ─────────────────────────────────────────────────
+        merged["User-Agent"] = ua
+
+        # ── 4. Accept ─────────────────────────────────────────────────────
+        merged["Accept"] = accept
+
+        # ── 5. Origin ─────────────────────────────────────────────────────
+        if origin:
+            merged["Origin"] = origin
+
+        # ── 6. Remaining custom caller headers ────────────────────────────
+        # (Authorization, Bigmodel-Organization, X-Requested-With, etc.)
+        merged.update(caller)
+
+        # ── 7. Sec-Fetch metadata (browser-injected, always present) ──────
+        merged["Sec-Fetch-Site"] = sec_fetch_site
+        merged["Sec-Fetch-Mode"] = "cors"
+        merged["Sec-Fetch-Dest"] = "empty"
+
+        # ── 8. Referer ────────────────────────────────────────────────────
+        if referer:
+            merged["Referer"] = referer
+
+        # ── 9. Accept-Encoding ────────────────────────────────────────────
+        # Chrome 120+ advertises zstd in addition to gzip/deflate/br.
+        merged["Accept-Encoding"] = "gzip, deflate, br, zstd"
+
+        # ── 10. Accept-Language ───────────────────────────────────────────
+        merged["Accept-Language"] = accept_lang
+
+        # ── 11. Priority (RFC 9218, Chrome/Edge 119+) ─────────────────────
+        # XHR / fetch: urgency=1, incremental
+        if profile.family in ("chrome", "edge"):
+            merged["priority"] = "u=1, i"
+
         return merged
+
+    # ------------------------------------------------------------------
+    # Dispatch
+    # ------------------------------------------------------------------
 
     def _dispatch(
         self,
@@ -209,6 +351,10 @@ class FingerprintHttpClient:
                 details={"transport": self.transport_name, "url": url, "reason": str(exc)},
             ) from exc
 
+    # ------------------------------------------------------------------
+    # Response helpers
+    # ------------------------------------------------------------------
+
     def _decode_response(self, *, response: Any, url: str):
         self._ensure_success(response=response, url=url)
         try:
@@ -223,7 +369,6 @@ class FingerprintHttpClient:
                     "body_preview": getattr(response, "text", "")[:500],
                 },
             ) from exc
-
         return payload
 
     def _ensure_success(self, *, response: Any, url: str) -> None:

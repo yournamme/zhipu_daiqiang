@@ -118,6 +118,7 @@ class AccountStateService:
                 preview_concurrency=_clamp_preview_concurrency(existing.get("preview_concurrency") if existing else 1),
                 preview_concurrency_time_enabled=bool(existing.get("preview_concurrency_time_enabled")) if existing else False,
                 preview_concurrency_time=str(existing.get("preview_concurrency_time") or "") if existing else "",
+                ticket_pool_size=max(0, int(existing.get("ticket_pool_size") or 0)) if existing else 0,
                 schedule_enabled=bool(existing.get("schedule_enabled")) if existing else False,
                 scheduled_start_time=str(existing.get("scheduled_start_time") or DEFAULT_SCHEDULED_START_TIME) if existing else DEFAULT_SCHEDULED_START_TIME,
                 last_scheduled_run_at=existing.get("last_scheduled_run_at") if existing else None,
@@ -264,6 +265,8 @@ class AccountStateService:
             account.preview_concurrency_time_enabled = bool(request.preview_concurrency_time_enabled)
         if request.preview_concurrency_time is not None:
             account.preview_concurrency_time = request.preview_concurrency_time.strip()
+        if request.ticket_pool_size is not None:
+            account.ticket_pool_size = max(0, min(50, int(request.ticket_pool_size)))
         if self._should_skip_today_after_schedule_update(
             account=account,
             previous_schedule_enabled=previous_schedule_enabled,
@@ -410,6 +413,7 @@ class AccountStateService:
             preview_concurrency=account.preview_concurrency,
             preview_concurrency_time_enabled=account.preview_concurrency_time_enabled,
             preview_concurrency_time=account.preview_concurrency_time,
+            ticket_pool_size=account.ticket_pool_size,
             schedule_enabled=account.schedule_enabled,
             scheduled_start_time=account.scheduled_start_time,
             last_scheduled_run_at=account.last_scheduled_run_at,
@@ -427,6 +431,12 @@ class AccountStateService:
             created_at=account.created_at,
             updated_at=account.updated_at,
         )
+
+    def clear_ticket_pool(self, account_id: str) -> AccountSessionState:
+        """Remove all collected tickets from the pool (both used and unused)."""
+        session = self.load_session(account_id)
+        session.ticket_pool = []
+        return self.save_session(session)
 
     def set_account_status(
         self,

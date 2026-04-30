@@ -10,6 +10,17 @@ PayType = Literal["ALI", "WE_CHAT"]
 PurchaseMode = Literal["new_purchase", "upgrade"]
 
 
+class TicketPoolEntry(BaseModel):
+    """Single captcha ticket collected for the pool-mode preview flow."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    ticket: str
+    randstr: str
+    collected_at: str  # ISO-8601 UTC
+    used: bool = False
+
+
 class ProductOffer(BaseModel):
     """Merged static and dynamic product information."""
 
@@ -72,6 +83,7 @@ class AccountRecord(BaseModel):
     preview_concurrency: int = 1
     preview_concurrency_time_enabled: bool = False
     preview_concurrency_time: str = ""
+    ticket_pool_size: int = 0  # 0 = disabled; N > 0 = pool mode: collect N tickets first
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -103,6 +115,7 @@ class PublicAccountRecord(BaseModel):
     preview_concurrency: int = 1
     preview_concurrency_time_enabled: bool = False
     preview_concurrency_time: str = ""
+    ticket_pool_size: int = 0
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -149,6 +162,8 @@ class AccountSessionState(BaseModel):
     preview: PreviewResult | None = None
     last_sign: str = ""
     last_order_id: str = ""
+    # Ticket pool for pool-mode preview (persists across service restarts)
+    ticket_pool: list[TicketPoolEntry] = Field(default_factory=list)
     updated_at: str
 
 
@@ -255,6 +270,7 @@ class AccountPreferencesRequest(BaseModel):
     preview_concurrency: int | None = None
     preview_concurrency_time_enabled: bool | None = None
     preview_concurrency_time: str | None = None
+    ticket_pool_size: int | None = None
     schedule_enabled: bool | None = None
     scheduled_start_time: str | None = None
 

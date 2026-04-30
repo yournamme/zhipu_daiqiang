@@ -1,3 +1,10 @@
+export interface TicketPoolEntry {
+  ticket: string;
+  randstr: string;
+  collected_at: string;
+  used: boolean;
+}
+
 export type PurchaseMode = "new_purchase" | "upgrade";
 export type PayType = "ALI" | "WE_CHAT";
 
@@ -60,6 +67,7 @@ export interface PublicAccountRecord {
   preview_concurrency?: number;
   preview_concurrency_time_enabled?: boolean;
   preview_concurrency_time?: string;
+  ticket_pool_size?: number;
   schedule_enabled?: boolean;
   scheduled_start_time?: string;
   last_scheduled_run_at?: string | null;
@@ -96,6 +104,8 @@ export interface AccountSessionState {
   preview?: Record<string, unknown> | null;
   last_sign?: string;
   last_order_id?: string;
+  ticket_pool?: TicketPoolEntry[];
+  ticket_pool_collected?: number;
   updated_at?: string;
   [key: string]: unknown;
 }
@@ -138,4 +148,5 @@ export interface AccountPreferencesPayload {
   preview_concurrency_time?: string | null;
   schedule_enabled?: boolean | null;
   scheduled_start_time?: string | null;
+  ticket_pool_size?: number | null;
 }

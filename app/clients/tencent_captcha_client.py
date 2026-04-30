@@ -16,13 +16,6 @@ from app.config import Settings, get_settings
 from app.errors import UpstreamRequestError
 from app.models import AccountRecord
 
-DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
-
-
 @dataclass(frozen=True)
 class CaptchaChallenge:
     """Normalized Tencent captcha challenge bundle."""
@@ -70,6 +63,7 @@ class TencentCaptchaClient:
                 "Accept": "*/*",
                 "Referer": self.settings.tencent_captcha_entry_url,
             },
+            sec_fetch_site="cross-site",
             params={
                 "aid": self.settings.tencent_captcha_aid,
                 "protocol": "https",
@@ -132,6 +126,7 @@ class TencentCaptchaClient:
             proxy_url=account.proxy_url or None,
             user_agent=user_agent,
             browser_impersonate=account.browser_impersonate or None,
+            sec_fetch_site="cross-site",
         )
 
     def verify(self, account: AccountRecord, payload: dict[str, Any]) -> CaptchaVerifyResult:
@@ -155,6 +150,7 @@ class TencentCaptchaClient:
             proxy_url=account.proxy_url or None,
             user_agent=user_agent,
             browser_impersonate=account.browser_impersonate or None,
+            sec_fetch_site="cross-site",
         )
         if not isinstance(response, dict):
             raise UpstreamRequestError(
