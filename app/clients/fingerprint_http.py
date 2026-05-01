@@ -311,8 +311,9 @@ class FingerprintHttpClient:
                     kwargs["json"] = json_body
                 if form_body is not None:
                     kwargs["data"] = form_body
-                if proxy_url:
-                    kwargs["proxies"] = {"http": proxy_url, "https": proxy_url}
+                effective_proxy = proxy_url or self.settings.fallback_proxy_url
+                if effective_proxy:
+                    kwargs["proxies"] = {"http": effective_proxy, "https": effective_proxy}
                 else:
                     kwargs["proxies"] = {"all": ""}
                 return session.request(**kwargs)
@@ -341,8 +342,9 @@ class FingerprintHttpClient:
                 "follow_redirects": True,
                 "trust_env": False,
             }
-            if proxy_url:
-                client_kwargs["proxy"] = proxy_url
+            effective_proxy = proxy_url or self.settings.fallback_proxy_url
+            if effective_proxy:
+                client_kwargs["proxy"] = effective_proxy
             with httpx.Client(**client_kwargs) as client:
                 return client.request(**kwargs)
         except Exception as exc:

@@ -46,6 +46,22 @@ if exist web\package.json (
         popd
     )
 )
+REM ── Dynamic Proxy (optional) ─────────────────────────────────────────────────
+REM If dynamic-proxy\dynamic-proxy.exe exists, start it in a background window.
+REM Set FALLBACK_PROXY_URL=http://127.0.0.1:17286 in .env to route all accounts
+REM (that have no per-account proxy_url) through the rotating proxy pool.
+if exist dynamic-proxy\dynamic-proxy.exe (
+    echo [glmDesk] Starting dynamic-proxy in background...
+    pushd dynamic-proxy
+    start "glmDesk-dynamic-proxy" /B dynamic-proxy.exe > ..\.dynamic-proxy.log 2>&1
+    popd
+    echo [glmDesk] dynamic-proxy started. Log: .dynamic-proxy.log
+    echo [glmDesk] Add FALLBACK_PROXY_URL=http://127.0.0.1:17286 to .env to enable proxy rotation.
+) else (
+    echo [glmDesk] dynamic-proxy.exe not found, skipping proxy rotation.
+    echo [glmDesk] Build it with: cd dynamic-proxy ^&^& go build -o dynamic-proxy.exe
+)
+REM ── FastAPI server ─────────────────────────────────────────────────────────────
 echo [glmDesk] Starting FastAPI server...
 .venv\Scripts\python.exe -m uvicorn app.main:app --host %APP_HOST% --port %APP_PORT% --reload
 

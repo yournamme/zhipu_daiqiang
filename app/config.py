@@ -45,6 +45,7 @@ class Settings:
     tencent_ocr_onnx_threads: int
     runtime_log_level: str
     runtime_log_retention_days: int
+    fallback_proxy_url: str  # when set, used for accounts without their own proxy_url
 
 
 @lru_cache(maxsize=1)
@@ -129,6 +130,7 @@ def get_settings() -> Settings:
             os.getenv("RUNTIME_LOG_RETENTION_DAYS", "7"),
             field_name="RUNTIME_LOG_RETENTION_DAYS",
         ),
+        fallback_proxy_url=os.getenv("FALLBACK_PROXY_URL", "").strip(),
     )
 
 
