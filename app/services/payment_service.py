@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import concurrent.futures
 import logging
+import random
 import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -1142,6 +1143,21 @@ class PaymentService:
         )
         return session
 
+    @staticmethod
+    def _ticket_pool_jitter_sleep(jitter_ms: int) -> None:
+        """Sleep a random duration in [0, jitter_ms] ms to spread drain requests.
+
+        Used both as a per-account start offset (before the first ticket) and as
+        an inter-ticket delay (between consecutive drain calls) to avoid triggering
+        CDN / WAF burst-traffic detection (which returns HTTP 405).
+        """
+        if jitter_ms <= 0:
+            return
+        import time as _time
+        delay_s = random.uniform(0, jitter_ms) / 1000.0
+        if delay_s > 0:
+            _time.sleep(delay_s)
+
     def _drain_ticket_pool(
         self,
         account_id: str,
@@ -1170,6 +1186,9 @@ class PaymentService:
             details={"count": len(unused)},
         )
         self._push_runtime_message(account_id, f"ticket 池消耗中，共 {len(unused)} 个 ticket")
+
+        # Start-jitter: stagger drain across concurrent accounts to avoid WAF burst detection
+        self._ticket_pool_jitter_sleep(account.ticket_pool_start_jitter_ms)
 
         for idx, entry in enumerate(unused, start=1):
             self._ensure_not_paused(account_id)
@@ -1216,6 +1235,7 @@ class PaymentService:
                     },
                     level=logging.WARNING,
                 )
+                self._ticket_pool_jitter_sleep(account.ticket_pool_drain_jitter_ms)
                 continue
 
             raw = result.raw
@@ -1261,6 +1281,8 @@ class PaymentService:
                     ),
                     raw=raw,
                 )
+
+            self._ticket_pool_jitter_sleep(account.ticket_pool_drain_jitter_ms)
 
         raise UpstreamRequestError(
             "ticket 池已耗尽，所有 ticket 均未能拿到 bizId",

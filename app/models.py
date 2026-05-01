@@ -84,6 +84,8 @@ class AccountRecord(BaseModel):
     preview_concurrency_time_enabled: bool = False
     preview_concurrency_time: str = ""
     ticket_pool_size: int = 0  # 0 = disabled; N > 0 = pool mode: collect N tickets first
+    ticket_pool_start_jitter_ms: int = 0   # random [0, N] ms delay before first drain call; 0 = disabled
+    ticket_pool_drain_jitter_ms: int = 0   # random [0, N] ms delay between each drain call; 0 = disabled
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -116,6 +118,8 @@ class PublicAccountRecord(BaseModel):
     preview_concurrency_time_enabled: bool = False
     preview_concurrency_time: str = ""
     ticket_pool_size: int = 0
+    ticket_pool_start_jitter_ms: int = 0
+    ticket_pool_drain_jitter_ms: int = 0
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -271,6 +275,8 @@ class AccountPreferencesRequest(BaseModel):
     preview_concurrency_time_enabled: bool | None = None
     preview_concurrency_time: str | None = None
     ticket_pool_size: int | None = None
+    ticket_pool_start_jitter_ms: int | None = None
+    ticket_pool_drain_jitter_ms: int | None = None
     schedule_enabled: bool | None = None
     scheduled_start_time: str | None = None
 
@@ -293,6 +299,18 @@ class AccountPreferencesRequest(BaseModel):
     @classmethod
     def validate_preview_concurrency_time(cls, value: str | None) -> str | None:
         return _normalize_hms(value, field_name="preview_concurrency_time")
+
+    @field_validator("ticket_pool_start_jitter_ms", "ticket_pool_drain_jitter_ms")
+    @classmethod
+    def validate_ticket_pool_jitter_ms(cls, value: int | None) -> int | None:
+        if value is None:
+            return None
+        v = int(value)
+        if v < 0:
+            raise ValueError("jitter 延迟不能为负数")
+        if v > 10_000:
+            raise ValueError("jitter 延迟不能超过 10000ms")
+        return v
 
 
 class CaptchaPoint(BaseModel):

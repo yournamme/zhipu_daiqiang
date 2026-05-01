@@ -267,6 +267,10 @@ class AccountStateService:
             account.preview_concurrency_time = request.preview_concurrency_time.strip()
         if request.ticket_pool_size is not None:
             account.ticket_pool_size = max(0, min(50, int(request.ticket_pool_size)))
+        if request.ticket_pool_start_jitter_ms is not None:
+            account.ticket_pool_start_jitter_ms = max(0, min(10_000, int(request.ticket_pool_start_jitter_ms)))
+        if request.ticket_pool_drain_jitter_ms is not None:
+            account.ticket_pool_drain_jitter_ms = max(0, min(10_000, int(request.ticket_pool_drain_jitter_ms)))
         if self._should_skip_today_after_schedule_update(
             account=account,
             previous_schedule_enabled=previous_schedule_enabled,
