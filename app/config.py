@@ -45,6 +45,9 @@ class Settings:
     tencent_ocr_onnx_threads: int
     runtime_log_level: str
     runtime_log_retention_days: int
+    ticket_pool_start_jitter_ms: int
+    ticket_pool_drain_jitter_ms: int
+    ticket_pool_drain_mode: str
     fallback_proxy_url: str  # when set, used for accounts without their own proxy_url
 
 
@@ -130,6 +133,23 @@ def get_settings() -> Settings:
             os.getenv("RUNTIME_LOG_RETENTION_DAYS", "7"),
             field_name="RUNTIME_LOG_RETENTION_DAYS",
         ),
+        ticket_pool_start_jitter_ms=_parse_bounded_int(
+            os.getenv("TICKET_POOL_START_JITTER_MS", "0"),
+            field_name="TICKET_POOL_START_JITTER_MS",
+            minimum=0,
+            maximum=10_000,
+        ),
+        ticket_pool_drain_jitter_ms=_parse_bounded_int(
+            os.getenv("TICKET_POOL_DRAIN_JITTER_MS", "0"),
+            field_name="TICKET_POOL_DRAIN_JITTER_MS",
+            minimum=0,
+            maximum=10_000,
+        ),
+        ticket_pool_drain_mode=_parse_choice(
+            os.getenv("TICKET_POOL_DRAIN_MODE", "serial"),
+            field_name="TICKET_POOL_DRAIN_MODE",
+            choices={"serial", "parallel"},
+        ),
         fallback_proxy_url=os.getenv("FALLBACK_PROXY_URL", "").strip(),
     )
 
@@ -156,6 +176,21 @@ def _parse_float(raw: str, *, field_name: str) -> float:
         return float(raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be a number") from exc
+
+
+def _parse_bounded_int(raw: str, *, field_name: str, minimum: int, maximum: int) -> int:
+    value = _parse_int(raw, field_name=field_name)
+    if value < minimum or value > maximum:
+        raise ValueError(f"{field_name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _parse_choice(raw: str | None, *, field_name: str, choices: set[str]) -> str:
+    value = (raw or "").strip().lower()
+    if value not in choices:
+        allowed = ", ".join(sorted(choices))
+        raise ValueError(f"{field_name} must be one of: {allowed}")
+    return value
 
 
 def _parse_bool(raw: str | None) -> bool:

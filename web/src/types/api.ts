@@ -19,10 +19,20 @@ export interface ApiResponse<T> {
   error?: ApiErrorPayload;
 }
 
+export interface ProxyHealthPayload {
+  enabled?: boolean;
+  available?: boolean;
+  url?: string;
+  host?: string;
+  port?: number;
+  message?: string;
+}
+
 export interface HealthPayload {
   status?: string;
   transport: string;
   problems?: string[];
+  proxy?: ProxyHealthPayload;
   [key: string]: unknown;
 }
 

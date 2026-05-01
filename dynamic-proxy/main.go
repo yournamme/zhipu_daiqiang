@@ -23,20 +23,20 @@ import (
 
 // Config represents the application configuration
 type Config struct {
-	ProxyListURLs              []string `yaml:"proxy_list_urls"`
-	SpecialProxyListUrls       []string `yaml:"special_proxy_list_urls"` // 支持复杂格式的代理URL列表
-	HealthCheckConcurrency     int      `yaml:"health_check_concurrency"`
-	UpdateIntervalMinutes      int      `yaml:"update_interval_minutes"`
-	HealthCheck                struct {
-		TotalTimeoutSeconds           int    `yaml:"total_timeout_seconds"`
-		TLSHandshakeThresholdSeconds  int    `yaml:"tls_handshake_threshold_seconds"`
-		Target                        string `yaml:"target"` // host:port to test through each proxy
+	ProxyListURLs          []string `yaml:"proxy_list_urls"`
+	SpecialProxyListUrls   []string `yaml:"special_proxy_list_urls"` // 支持复杂格式的代理URL列表
+	HealthCheckConcurrency int      `yaml:"health_check_concurrency"`
+	UpdateIntervalMinutes  int      `yaml:"update_interval_minutes"`
+	HealthCheck            struct {
+		TotalTimeoutSeconds          int    `yaml:"total_timeout_seconds"`
+		TLSHandshakeThresholdSeconds int    `yaml:"tls_handshake_threshold_seconds"`
+		Target                       string `yaml:"target"` // host:port to test through each proxy
 	} `yaml:"health_check"`
 	Ports struct {
-		SOCKS5Strict   string `yaml:"socks5_strict"`
-		SOCKS5Relaxed  string `yaml:"socks5_relaxed"`
-		HTTPStrict     string `yaml:"http_strict"`
-		HTTPRelaxed    string `yaml:"http_relaxed"`
+		SOCKS5Strict  string `yaml:"socks5_strict"`
+		SOCKS5Relaxed string `yaml:"socks5_relaxed"`
+		HTTPStrict    string `yaml:"http_strict"`
+		HTTPRelaxed   string `yaml:"http_relaxed"`
 	} `yaml:"ports"`
 }
 
@@ -92,10 +92,10 @@ func loadConfig(filename string) (*Config, error) {
 }
 
 type ProxyPool struct {
-	proxies   []string
-	mu        sync.RWMutex
-	index     uint64
-	updating  int32 // atomic flag to prevent concurrent updates
+	proxies  []string
+	mu       sync.RWMutex
+	index    uint64
+	updating int32 // atomic flag to prevent concurrent updates
 }
 
 func NewProxyPool() *ProxyPool {
@@ -168,6 +168,30 @@ func parseSpecialProxyURL(content string) ([]string, error) {
 	return proxies, nil
 }
 
+func readProxySource(client *http.Client, source string) (string, error) {
+	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
+		resp, err := client.Get(source)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("unexpected status code %d", resp.StatusCode)
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		return string(body), nil
+	}
+
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 func fetchProxyList() ([]string, error) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -181,30 +205,16 @@ func fetchProxyList() ([]string, error) {
 	allProxies := make([]string, 0)
 	proxySet := make(map[string]bool) // 用于去重
 
-	// 处理普通代理URL（简单格式）
-	for _, url := range config.ProxyListURLs {
-		log.Printf("Fetching proxy list from regular URL: %s", url)
+	// 处理普通代理源（简单格式，支持 HTTP(S) URL 或本地文件）
+	for _, source := range config.ProxyListURLs {
+		log.Printf("Fetching proxy list from regular source: %s", source)
 
-		resp, err := client.Get(url)
+		content, err := readProxySource(client, source)
 		if err != nil {
-			log.Printf("Warning: Failed to fetch from %s: %v", url, err)
-			continue // 继续尝试其他URL
+			log.Printf("Warning: Failed to fetch from %s: %v", source, err)
+			continue // 继续尝试其他源
 		}
 
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("Warning: Unexpected status code %d from %s", resp.StatusCode, url)
-			resp.Body.Close()
-			continue
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("Warning: Error reading body from %s: %v", url, err)
-			continue
-		}
-
-		content := string(body)
 		count := 0
 		scanner := bufio.NewScanner(strings.NewReader(content))
 		for scanner.Scan() {
@@ -227,7 +237,7 @@ func fetchProxyList() ([]string, error) {
 			}
 		}
 
-		log.Printf("Fetched %d proxies from regular URL %s", count, url)
+		log.Printf("Fetched %d proxies from regular source %s", count, source)
 	}
 
 	// 处理特殊代理URL（复杂格式）

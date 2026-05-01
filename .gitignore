@@ -4,6 +4,10 @@
 .codex/
 .codex_tmp/
 
+.dynamic-proxy.log
+dynamic-proxy-test.log
+dynamic-proxy/good_proxies.txt
+
 __pycache__/
 *.py[cod]
 *.pyd

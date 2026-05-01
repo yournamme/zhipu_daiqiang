@@ -4,6 +4,8 @@ export const zhCN = {
     eyebrow: "本地运营控制台",
     description: "集中管理账号编排、支付二维码、定时任务和上下文排查。",
     transportPending: "传输状态待确认",
+    proxyReady: "代理池可用",
+    proxyUnavailable: "代理池异常",
     primaryActionsLabel: "主要操作",
     commandCenterLabel: "GLM Desk 控制中心",
     viewLogs: "查看日志",
@@ -109,6 +111,7 @@ export const zhCN = {
     probeStarted: "测活任务已启动",
     pauseRequested: "已请求暂停",
     openQr: "打开二维码",
+    openQrFor: (label: string) => `打开 ${label}`,
     qrGenerated: (label: string, bizId: string) =>
       `账号 ${label} 已生成支付二维码${bizId ? `，bizId: ${bizId}` : ""}`,
     qrGeneratedBatch: (count: number, labels: string) =>

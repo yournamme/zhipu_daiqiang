@@ -65,7 +65,7 @@ def create_app() -> FastAPI:
                 stage="preflight",
                 status="failed",
                 message="运行前置依赖检查存在问题，请先处理后再启动任务",
-                details={"problems": health.get("problems") or [], "tdc": health.get("tdc"), "ocr": health.get("ocr")},
+                details={"problems": health.get("problems") or [], "tdc": health.get("tdc"), "ocr": health.get("ocr"), "proxy": health.get("proxy")},
                 level=logging.ERROR,
             )
         get_scheduler_service().start()

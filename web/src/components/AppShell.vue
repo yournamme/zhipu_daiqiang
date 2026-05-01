@@ -8,6 +8,9 @@ const props = defineProps<{
 }>();
 
 const healthProblems = computed(() => props.health?.problems || []);
+const proxyHealth = computed(() => props.health?.proxy);
+const proxyEnabled = computed(() => Boolean(proxyHealth.value?.enabled));
+const proxyAvailable = computed(() => Boolean(proxyHealth.value?.available));
 
 const emit = defineEmits<{
   logs: [];
@@ -25,6 +28,16 @@ const emit = defineEmits<{
       </div>
       <div class="command-actions" :aria-label="copy.app.primaryActionsLabel">
         <n-tag round type="info">{{ health?.transport || copy.app.transportPending }}</n-tag>
+        <n-tooltip v-if="proxyEnabled" trigger="hover">
+          <template #trigger>
+            <n-tag round :type="proxyAvailable ? 'success' : 'warning'">
+              {{ proxyAvailable ? copy.app.proxyReady : copy.app.proxyUnavailable }}
+            </n-tag>
+          </template>
+          <div class="preflight-tooltip">
+            <div>{{ proxyHealth?.message || proxyHealth?.url }}</div>
+          </div>
+        </n-tooltip>
         <n-tooltip v-if="healthProblems.length" trigger="hover">
           <template #trigger>
             <n-tag round type="error">{{ copy.app.preflightFailed(healthProblems.length) }}</n-tag>

@@ -99,6 +99,94 @@
 
 写进 `.env` 就行。
 
+## 动态代理与代理池
+
+项目支持通过本地 `dynamic-proxy` 做代理轮换。`start.bat` 会在检测到 `dynamic-proxy/dynamic-proxy.exe` 时自动后台启动它。
+
+### 启用方式
+
+1. 构建或准备 `dynamic-proxy/dynamic-proxy.exe`：
+
+```powershell
+cd dynamic-proxy
+go build -o dynamic-proxy.exe
+```
+
+2. 在 `.env` 中设置统一出口代理：
+
+```env
+FALLBACK_PROXY_URL=http://127.0.0.1:17286
+```
+
+端口含义：
+
+- `http://127.0.0.1:17285`：HTTP strict，本地代理服务会验证上游 TLS
+- `http://127.0.0.1:17286`：HTTP relaxed，本地代理服务不验证上游 TLS，兼容性更好
+- `socks5://127.0.0.1:17283`：SOCKS5 strict
+- `socks5://127.0.0.1:17284`：SOCKS5 relaxed
+
+### 请求是否会走代理池
+
+会，但前提是 `.env` 配的是本地 `dynamic-proxy` 监听地址，例如：
+
+```env
+FALLBACK_PROXY_URL=http://127.0.0.1:17286
+```
+
+实际链路是：
+
+```text
+GLM Desk 请求 -> FALLBACK_PROXY_URL -> dynamic-proxy -> 内存代理池 -> 上游代理 -> BigModel / Captcha
+```
+
+注意：`.env` 只决定 GLM Desk 是否把请求发给本地 `dynamic-proxy`，不直接读取 `good_proxies.txt`。`good_proxies.txt` 必须写进 `dynamic-proxy/config.yaml` 的 `proxy_list_urls`，才会被 `dynamic-proxy` 加载、健康检测并放入内存代理池。
+
+如果某个账号单独配置了 `proxy_url`，则该账号优先使用自己的 `proxy_url`，不会使用 `FALLBACK_PROXY_URL`。
+
+### 代理测试脚本
+
+`dynamic-proxy/proxy_checker.py` 用于在启动前预筛选代理。它会对每个代理执行：
+
+```text
+TCP 握手 -> SOCKS5 协商 -> CONNECT 目标主机 -> TLS 握手
+```
+
+推荐先筛出可用代理，再让 `dynamic-proxy` 读取筛选结果：
+
+```powershell
+cd dynamic-proxy
+python proxy_checker.py --from-config config.yaml --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
+```
+
+如果你已经有代理文件：
+
+```powershell
+cd dynamic-proxy
+python proxy_checker.py --source proxies.txt --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
+```
+
+生成 `good_proxies.txt` 后，在 `dynamic-proxy/config.yaml` 中加入：
+
+```yaml
+proxy_list_urls:
+  - "good_proxies.txt"
+```
+
+然后启动项目：
+
+```powershell
+start.bat
+```
+
+这样运行时才是：先用 `proxy_checker.py` 过滤出 `good_proxies.txt`，再由 `dynamic-proxy` 读取该文件并维护代理池，最后 GLM Desk 通过 `FALLBACK_PROXY_URL` 走这个代理池。
+
+### 代理配置建议
+
+- 目标是 `www.bigmodel.cn` 时，应使用国内可访问 BigModel 的代理源，不建议使用境外免费代理列表。
+- `proxy_checker.py` 的 `--target` 应与 `dynamic-proxy/config.yaml` 中 `health_check.target` 保持一致。
+- 免费代理波动很大，`good_proxies.txt` 只是当前时刻快照，正式运行前建议重新检测。
+- 如果 `dynamic-proxy` 日志出现 `No proxy available`，说明内存代理池为空，需要检查 `config.yaml` 代理源、`good_proxies.txt` 路径或健康检测阈值。
+
 ## 页面使用
 
 ### 1. 导入账号
@@ -398,6 +486,9 @@ BIGMODEL_REFERER=https://www.bigmodel.cn/glm-coding
 BROWSER_IMPERSONATE=chrome146
 BOOTSTRAP_FINGERPRINT_MAX_RETRIES=99
 REQUEST_TIMEOUT_SECONDS=20
+TICKET_POOL_START_JITTER_MS=0
+TICKET_POOL_DRAIN_JITTER_MS=0
+TICKET_POOL_DRAIN_MODE=serial
 DEFAULT_LANGUAGE=zh-CN
 TENCENT_CAPTCHA_DOMAIN=https://turing.captcha.qcloud.com
 TENCENT_CAPTCHA_AID=196026326
@@ -433,6 +524,9 @@ RUNTIME_LOG_RETENTION_DAYS=7
 | `BROWSER_IMPERSONATE` | `chrome146` | 全局兜底浏览器指纹 profile；账号实际请求优先用账号自己的随机 `browser_impersonate` |
 | `BOOTSTRAP_FINGERPRINT_MAX_RETRIES` | `99` | 点击“同步并换指纹”时的最大尝试次数；每轮先换一个账号级指纹，再完整同步上下文和套餐，失败才进入下一轮 |
 | `REQUEST_TIMEOUT_SECONDS` | `20` | 上游 HTTP 请求超时时间，单位秒 |
+| `TICKET_POOL_START_JITTER_MS` | `0` | ticket 池填满后、第一次 `/preview` 前的全局随机错峰上限，单位毫秒；账号级配置大于 `0` 时优先用账号级值 |
+| `TICKET_POOL_DRAIN_JITTER_MS` | `0` | ticket 池每张 ticket 发射间隔的全局随机错峰上限，单位毫秒；串行模式是在两次 `/preview` 之间 sleep，并行模式是按累计随机延迟错峰提交 |
+| `TICKET_POOL_DRAIN_MODE` | `serial` | ticket 池消耗模式：`serial` 为逐张串行请求，最稳；`parallel` 为错峰并行请求，谁先拿到 bizId 谁胜出，适合抢时间但更容易触发上游阈值 |
 | `DEFAULT_LANGUAGE` | `zh-CN` | 默认请求语言，会写入 `Accept-Language` 和 `Set-Language` |
 | `TENCENT_CAPTCHA_DOMAIN` | `https://turing.captcha.qcloud.com` | 腾讯验证码域名 |
 | `TENCENT_CAPTCHA_AID` | `196026326` | 腾讯验证码业务 `aid` |
@@ -457,6 +551,7 @@ RUNTIME_LOG_RETENTION_DAYS=7
 - 历史账号里的 `chrome / edge / firefox / chrome124 / chrome136 / firefox137 / firefox147` 会自动映射到当前支持的具体 profile
 - `BOOTSTRAP_FINGERPRINT_MAX_RETRIES` 小于 `1` 时会自动按 `1` 处理，避免配置错误导致完全不尝试
 - 如果你把 `TENCENT_OCR_WORKERS` 配得太高，OCR 并发会更猛，但内存占用也会跟着往上窜，别一上来就梭哈
+- ticket 池默认 `TICKET_POOL_DRAIN_MODE=serial`，这是为了避开 WAF 瞬时阈值；如果改成 `parallel`，建议同时配置 `TICKET_POOL_DRAIN_JITTER_MS` 做错峰，比如 `300~1000`，别又一把梭把 WAF 打醒
 
 ## 已知说明
 

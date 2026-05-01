@@ -11,15 +11,20 @@
 #   - 太阳HTTP https://www.taiyanghttps.com/
 # 将 API 返回的 txt 格式地址填入 proxy_list_urls 即可。
 
-# 代理列表 URL（每行一个 ip:port 或带协议前缀）
+# 代理列表来源（每行一个 ip:port 或带协议前缀）
+# 支持 HTTP(S) URL，也支持本地文件路径。
+# 如果先用 proxy_checker.py 筛选代理，可以将输出文件填入这里，例如：
+#   - "good_proxies.txt"
 proxy_list_urls:
+  # 推荐：使用本地预筛选结果。该文件由 proxy_checker.py 生成，路径相对 dynamic-proxy 工作目录。
+  # 文件不存在时 dynamic-proxy 会记录 warning，并继续尝试下面的在线代理源。
+  - "good_proxies.txt"
   # 示例：付费国内代理 API 地址（替换为你自己的）
   # - "https://your-proxy-provider.com/api/get?type=txt&protocol=http&num=100"
   #
   # 以下为境外免费列表，仅适合目标是境外站点时使用：
-  - "https://raw.githubusercontent.com/r00tee/Proxy-List/main/Socks5.txt"
-  - "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/socks5/raw/all.txt"
-
+  # - "https://raw.githubusercontent.com/r00tee/Proxy-List/main/Socks5.txt"
+  # - "https://raw.githubusercontent.com/ClearProxy/checked-proxy-list/main/socks5/raw/all.txt"
 # 特殊格式代理列表（自动用正则提取 ip:port）
 special_proxy_list_urls:
   # - "https://example.com/complex-format-list.txt"

@@ -6,7 +6,10 @@ import base64
 import concurrent.futures
 import logging
 import random
+import socket
 import threading
+import time
+from urllib.parse import urlparse
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from functools import lru_cache
@@ -117,18 +120,60 @@ class PaymentService:
     def health_payload(self) -> dict[str, Any]:
         ocr_status = self.ocr_service.status_payload()
         tdc_status = self.tdc_service.status_payload()
+        proxy_status = self._fallback_proxy_health_payload()
         problems: list[str] = []
         if not bool(ocr_status.get("available")):
             missing = ocr_status.get("missing_dependencies") or []
             problems.append(f"OCR 依赖不可用：{missing}")
         if not bool(tdc_status.get("available")):
             problems.extend(str(item) for item in (tdc_status.get("problems") or []))
+        if proxy_status.get("enabled") and not proxy_status.get("available"):
+            problems.append(str(proxy_status.get("message") or "代理池不可用"))
         return {
             "status": "ok" if not problems else "degraded",
             "problems": problems,
             "transport": self.bigmodel_client.transport_name,
             "ocr": ocr_status,
             "tdc": tdc_status,
+            "proxy": proxy_status,
+        }
+
+    def _fallback_proxy_health_payload(self) -> dict[str, Any]:
+        proxy_url = self.settings.fallback_proxy_url.strip()
+        if not proxy_url:
+            return {"enabled": False, "available": False, "url": "", "message": "未配置全局代理池"}
+
+        parsed = urlparse(proxy_url)
+        host = parsed.hostname or ""
+        port = parsed.port
+        if not host or not port:
+            return {
+                "enabled": True,
+                "available": False,
+                "url": proxy_url,
+                "message": f"代理池地址格式异常：{proxy_url}",
+            }
+
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                pass
+        except OSError as exc:
+            return {
+                "enabled": True,
+                "available": False,
+                "url": proxy_url,
+                "host": host,
+                "port": port,
+                "message": f"代理池不可用：{proxy_url} ({exc})",
+            }
+
+        return {
+            "enabled": True,
+            "available": True,
+            "url": proxy_url,
+            "host": host,
+            "port": port,
+            "message": f"代理池已连接：{proxy_url}",
         }
 
     def _captcha_ticket_log_details(self, ticket: str, randstr: str) -> dict[str, Any]:
@@ -1145,20 +1190,52 @@ class PaymentService:
 
     @staticmethod
     def _ticket_pool_jitter_sleep(jitter_ms: int) -> None:
-        """Sleep a random duration in [0, jitter_ms] ms to spread drain requests.
-
-        Used both as a per-account start offset (before the first ticket) and as
-        an inter-ticket delay (between consecutive drain calls) to avoid triggering
-        CDN / WAF burst-traffic detection (which returns HTTP 405).
-        """
+        """Sleep a random duration in [0, jitter_ms] ms to spread drain requests."""
         if jitter_ms <= 0:
             return
-        import time as _time
         delay_s = random.uniform(0, jitter_ms) / 1000.0
         if delay_s > 0:
-            _time.sleep(delay_s)
+            time.sleep(delay_s)
+
+    def _ticket_pool_start_jitter_ms(self, account: AccountRecord) -> int:
+        """Per-account jitter wins; .env provides the global default."""
+        return account.ticket_pool_start_jitter_ms if account.ticket_pool_start_jitter_ms > 0 else self.settings.ticket_pool_start_jitter_ms
+
+    def _ticket_pool_drain_jitter_ms(self, account: AccountRecord) -> int:
+        """Per-account jitter wins; .env provides the global default."""
+        return account.ticket_pool_drain_jitter_ms if account.ticket_pool_drain_jitter_ms > 0 else self.settings.ticket_pool_drain_jitter_ms
 
     def _drain_ticket_pool(
+        self,
+        account_id: str,
+        account: AccountRecord,
+        session: AccountSessionState,
+        request: PreviewPaymentRequest,
+        invitation: str,
+        *,
+        flow: FlowRun,
+    ) -> PreviewResult:
+        """Consume pool tickets according to the configured drain mode."""
+        mode = self.settings.ticket_pool_drain_mode
+        if mode == "parallel":
+            return self._drain_ticket_pool_parallel(
+                account_id,
+                account,
+                session,
+                request,
+                invitation,
+                flow=flow,
+            )
+        return self._drain_ticket_pool_serial(
+            account_id,
+            account,
+            session,
+            request,
+            invitation,
+            flow=flow,
+        )
+
+    def _drain_ticket_pool_serial(
         self,
         account_id: str,
         account: AccountRecord,
@@ -1171,6 +1248,8 @@ class PaymentService:
         """Consume pool tickets one by one until /preview returns a bizId."""
         pool = list(session.ticket_pool)
         unused = [e for e in pool if not e.used]
+        start_jitter_ms = self._ticket_pool_start_jitter_ms(account)
+        drain_jitter_ms = self._ticket_pool_drain_jitter_ms(account)
 
         if not unused:
             raise UpstreamRequestError(
@@ -1182,20 +1261,23 @@ class PaymentService:
             flow,
             stage="ticket_pool_drain",
             status="started",
-            message=f"开始消耗 ticket 池，共 {len(unused)} 个 ticket 待用",
-            details={"count": len(unused)},
+            message=f"开始串行消耗 ticket 池，共 {len(unused)} 个 ticket 待用",
+            details={
+                "count": len(unused),
+                "mode": "serial",
+                "start_jitter_ms": start_jitter_ms,
+                "drain_jitter_ms": drain_jitter_ms,
+            },
         )
-        self._push_runtime_message(account_id, f"ticket 池消耗中，共 {len(unused)} 个 ticket")
+        self._push_runtime_message(account_id, f"ticket 池串行消耗中，共 {len(unused)} 个 ticket")
 
-        # Start-jitter: stagger drain across concurrent accounts to avoid WAF burst detection
-        self._ticket_pool_jitter_sleep(account.ticket_pool_start_jitter_ms)
+        self._ticket_pool_jitter_sleep(start_jitter_ms)
 
         for idx, entry in enumerate(unused, start=1):
             self._ensure_not_paused(account_id)
             ticket = entry.ticket
             randstr = entry.randstr
 
-            # Mark as used immediately so a restart won't re-use it
             entry.used = True
             session.ticket_pool = pool
             self.state_service.save_session(session)
@@ -1204,10 +1286,11 @@ class PaymentService:
                 flow,
                 stage="ticket_pool_drain",
                 status="calling_preview",
-                message=f"pool 第 {idx}/{len(unused)} 个 ticket → /preview",
+                message=f"pool 串行第 {idx}/{len(unused)} 个 ticket → /preview",
                 details={
                     "idx": idx,
                     "total": len(unused),
+                    "mode": "serial",
                     "ticket_prefix": ticket[:12],
                     "collected_at": entry.collected_at,
                 },
@@ -1227,66 +1310,277 @@ class PaymentService:
                     flow,
                     stage="ticket_pool_drain",
                     status="error",
-                    message=f"pool 第 {idx} 个 ticket 请求异常: {exc.message}",
+                    message=f"pool 串行第 {idx} 个 ticket 请求异常: {exc.message}",
                     details={
                         "idx": idx,
+                        "mode": "serial",
                         "error": exc.message,
                         **self._captcha_ticket_log_details(ticket, randstr),
                     },
                     level=logging.WARNING,
                 )
-                self._ticket_pool_jitter_sleep(account.ticket_pool_drain_jitter_ms)
+                self._ticket_pool_jitter_sleep(drain_jitter_ms)
                 continue
 
             raw = result.raw
             code = raw.get("code")
             data = result.data if isinstance(result.data, dict) else {}
             biz_id = str(data.get("bizId") or "").strip()
-
-            # Full response logged for every attempt — lets us confirm if ticket expired
-            self.runtime_logs.log_event(
-                flow,
-                stage="ticket_pool_drain",
-                status="success" if (code == 200 and biz_id) else "no_biz_id",
-                message=(
-                    f"pool 第 {idx} 个 ticket 成功拿到 bizId!"
-                    if (code == 200 and biz_id)
-                    else f"pool 第 {idx} 个 ticket 未返回 bizId"
-                ),
-                details=self._preview_response_log_details(
-                    raw=raw,
-                    ticket=ticket,
-                    randstr=randstr,
-                    extra={"idx": idx, "total": len(unused), "pool_mode": True},
-                ),
-                level=logging.INFO if (code == 200 and biz_id) else logging.WARNING,
+            self._log_ticket_pool_preview_response(
+                flow=flow,
+                idx=idx,
+                total=len(unused),
+                mode="serial",
+                raw=raw,
+                ticket=ticket,
+                randstr=randstr,
             )
 
             if code == 200 and biz_id:
-                self._push_runtime_message(account_id, f"pool 第 {idx} 个 ticket 成功，bizId: {biz_id}")
-                return PreviewResult(
-                    biz_id=biz_id,
-                    third_party_amount=self._string_value(data, "thirdPartyAmount"),
-                    sold_out=bool(data.get("soldOut")),
-                    original_amount=self._string_value(data, "originalAmount"),
-                    pay_amount=self._string_value(data, "payAmount"),
-                    residual_amount=self._string_value(data, "residualAmount"),
-                    give_amount=self._string_value(data, "giveAmount"),
-                    cash_amount=self._string_value(data, "cashAmount"),
-                    renew_amount=self._string_value(data, "renewAmount"),
-                    campaign_discount_details=list(data.get("campaignDiscountDetails") or []),
-                    last_subscription_summary=self._ensure_dict(
-                        data.get("lastSubscriptionSummary") or {},
-                        label="pool_drain.preview.lastSubscriptionSummary",
-                    ),
-                    raw=raw,
-                )
+                self._push_runtime_message(account_id, f"pool 串行第 {idx} 个 ticket 成功，bizId: {biz_id}")
+                return self._preview_from_upstream_payload(raw)
 
-            self._ticket_pool_jitter_sleep(account.ticket_pool_drain_jitter_ms)
+            self._ticket_pool_jitter_sleep(drain_jitter_ms)
 
         raise UpstreamRequestError(
             "ticket 池已耗尽，所有 ticket 均未能拿到 bizId",
-            details={"account_id": account_id, "tickets_tried": len(unused)},
+            details={"account_id": account_id, "tickets_tried": len(unused), "mode": "serial"},
+        )
+
+    def _drain_ticket_pool_parallel(
+        self,
+        account_id: str,
+        account: AccountRecord,
+        session: AccountSessionState,
+        request: PreviewPaymentRequest,
+        invitation: str,
+        *,
+        flow: FlowRun,
+    ) -> PreviewResult:
+        """Stagger-submit pool tickets in parallel and return the first bizId winner."""
+        pool = list(session.ticket_pool)
+        unused = [e for e in pool if not e.used]
+        start_jitter_ms = self._ticket_pool_start_jitter_ms(account)
+        drain_jitter_ms = self._ticket_pool_drain_jitter_ms(account)
+
+        if not unused:
+            raise UpstreamRequestError(
+                "ticket 池为空，没有可用的 ticket",
+                details={"account_id": account_id, "pool_total": len(pool)},
+            )
+
+        self.runtime_logs.log_event(
+            flow,
+            stage="ticket_pool_drain",
+            status="started",
+            message=f"开始并行消耗 ticket 池，共 {len(unused)} 个 ticket 待用",
+            details={
+                "count": len(unused),
+                "mode": "parallel",
+                "start_jitter_ms": start_jitter_ms,
+                "drain_jitter_ms": drain_jitter_ms,
+            },
+        )
+        self._push_runtime_message(account_id, f"ticket 池并行消耗中，共 {len(unused)} 个 ticket")
+
+        self._ticket_pool_jitter_sleep(start_jitter_ms)
+
+        cumulative_delay_ms = 0.0
+        lane_specs: list[tuple[int, Any, float]] = []
+        for idx, entry in enumerate(unused, start=1):
+            lane_specs.append((idx, entry, cumulative_delay_ms))
+            if drain_jitter_ms > 0:
+                cumulative_delay_ms += random.uniform(0, drain_jitter_ms)
+
+        for _, entry, _ in lane_specs:
+            entry.used = True
+        session.ticket_pool = pool
+        self.state_service.save_session(session)
+
+        stop_event = threading.Event()
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(lane_specs),
+            thread_name_prefix=f"ticket-pool-{account_id}",
+        )
+        futures: dict[concurrent.futures.Future[PreviewResult | None], int] = {}
+        try:
+            for idx, entry, delay_ms in lane_specs:
+                futures[
+                    executor.submit(
+                        self._drain_ticket_pool_parallel_lane,
+                        account_id,
+                        account,
+                        session,
+                        request,
+                        invitation,
+                        idx,
+                        len(lane_specs),
+                        entry,
+                        delay_ms,
+                        stop_event,
+                        flow,
+                    )
+                ] = idx
+
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    preview = future.result()
+                except RunPausedError:
+                    stop_event.set()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise
+                except Exception as exc:
+                    self.runtime_logs.log_event(
+                        flow,
+                        stage="ticket_pool_drain",
+                        status="error",
+                        message=f"pool 并行 lane {futures[future]} 执行异常: {exc}",
+                        details={"idx": futures[future], "mode": "parallel", "error": str(exc)},
+                        level=logging.WARNING,
+                    )
+                    continue
+
+                if preview and preview.biz_id:
+                    stop_event.set()
+                    for pending in futures:
+                        if pending is not future:
+                            pending.cancel()
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    self._push_runtime_message(account_id, f"pool 并行抢到 bizId: {preview.biz_id}")
+                    return preview
+        finally:
+            if not stop_event.is_set():
+                executor.shutdown(wait=True, cancel_futures=False)
+
+        raise UpstreamRequestError(
+            "ticket 池已耗尽，所有 ticket 均未能拿到 bizId",
+            details={"account_id": account_id, "tickets_tried": len(unused), "mode": "parallel"},
+        )
+
+    def _drain_ticket_pool_parallel_lane(
+        self,
+        account_id: str,
+        account: AccountRecord,
+        session: AccountSessionState,
+        request: PreviewPaymentRequest,
+        invitation: str,
+        idx: int,
+        total: int,
+        entry: Any,
+        delay_ms: float,
+        stop_event: threading.Event,
+        flow: FlowRun,
+    ) -> PreviewResult | None:
+        if delay_ms > 0:
+            deadline = time.monotonic() + delay_ms / 1000.0
+            while True:
+                if stop_event.is_set():
+                    return None
+                self._ensure_not_paused(account_id)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(0.05, remaining))
+
+        if stop_event.is_set():
+            return None
+        self._ensure_not_paused(account_id)
+
+        ticket = entry.ticket
+        randstr = entry.randstr
+        self.runtime_logs.log_event(
+            flow,
+            stage="ticket_pool_drain",
+            status="calling_preview",
+            message=f"pool 并行第 {idx}/{total} 个 ticket → /preview",
+            details={
+                "idx": idx,
+                "total": total,
+                "mode": "parallel",
+                "dispatch_delay_ms": round(delay_ms, 3),
+                "ticket_prefix": ticket[:12],
+                "collected_at": entry.collected_at,
+            },
+        )
+
+        try:
+            result = self.bigmodel_client.preview_payment(
+                account,
+                session,
+                request,
+                invitation_code=invitation,
+                ticket=ticket,
+                randstr=randstr,
+            )
+        except UpstreamRequestError as exc:
+            self.runtime_logs.log_event(
+                flow,
+                stage="ticket_pool_drain",
+                status="error",
+                message=f"pool 并行第 {idx} 个 ticket 请求异常: {exc.message}",
+                details={
+                    "idx": idx,
+                    "total": total,
+                    "mode": "parallel",
+                    "dispatch_delay_ms": round(delay_ms, 3),
+                    "error": exc.message,
+                    **self._captcha_ticket_log_details(ticket, randstr),
+                },
+                level=logging.WARNING,
+            )
+            return None
+
+        raw = result.raw
+        code = raw.get("code")
+        data = result.data if isinstance(result.data, dict) else {}
+        biz_id = str(data.get("bizId") or "").strip()
+        self._log_ticket_pool_preview_response(
+            flow=flow,
+            idx=idx,
+            total=total,
+            mode="parallel",
+            raw=raw,
+            ticket=ticket,
+            randstr=randstr,
+            extra={"dispatch_delay_ms": round(delay_ms, 3)},
+        )
+
+        if code == 200 and biz_id:
+            stop_event.set()
+            return self._preview_from_upstream_payload(raw)
+        return None
+
+    def _log_ticket_pool_preview_response(
+        self,
+        *,
+        flow: FlowRun,
+        idx: int,
+        total: int,
+        mode: str,
+        raw: dict[str, Any],
+        ticket: str,
+        randstr: str,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        code = raw.get("code")
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+        biz_id = str(data.get("bizId") or "").strip() if isinstance(data, dict) else ""
+        self.runtime_logs.log_event(
+            flow,
+            stage="ticket_pool_drain",
+            status="success" if (code == 200 and biz_id) else "no_biz_id",
+            message=(
+                f"pool {mode} 第 {idx} 个 ticket 成功拿到 bizId!"
+                if (code == 200 and biz_id)
+                else f"pool {mode} 第 {idx} 个 ticket 未返回 bizId"
+            ),
+            details=self._preview_response_log_details(
+                raw=raw,
+                ticket=ticket,
+                randstr=randstr,
+                extra={"idx": idx, "total": total, "pool_mode": True, "drain_mode": mode, **(extra or {})},
+            ),
+            level=logging.INFO if (code == 200 and biz_id) else logging.WARNING,
         )
 
     def collect_captcha_tdc(self, account_id: str) -> dict[str, Any]:
@@ -2142,7 +2436,11 @@ class PaymentService:
                     stage="ticket_pool",
                     status="started",
                     message=f"ticket 池模式启动，目标 {ticket_pool_size} 个 ticket",
-                    details={"pool_size": ticket_pool_size, "deadline": deadline_time or "disabled"},
+                    details={
+                        "pool_size": ticket_pool_size,
+                        "deadline": deadline_time or "disabled",
+                        "drain_mode": self.settings.ticket_pool_drain_mode,
+                    },
                 )
                 self._push_runtime_message(account_id, f"ticket 池模式，目标 {ticket_pool_size} 个 ticket")
                 preview = self._run_pool_preview(

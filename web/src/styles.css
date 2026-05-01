@@ -140,6 +140,10 @@ textarea:focus-visible,
   color: #4a2c00;
 }
 
+.status-banner-links .status-banner-link {
+  margin-left: 0;
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

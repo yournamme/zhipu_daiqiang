@@ -10,11 +10,17 @@ import type {
 
 export type BannerTone = "success" | "warning" | "error" | "info";
 
+export interface StatusBannerLink {
+  text: string;
+  href: string;
+}
+
 export interface StatusBanner {
   tone: BannerTone;
   text: string;
   linkText?: string;
   linkHref?: string;
+  links?: StatusBannerLink[];
 }
 
 const POLL_INTERVAL_MS = 5000;
@@ -26,8 +32,11 @@ export function useDashboard() {
   const actionKey = ref("");
   const banner = ref<StatusBanner | null>(null);
   let pollTimer: number | undefined;
+  let titleTimer: number | undefined;
   let qrReminderReady = false;
   let knownQrTaskKeys = new Set<string>();
+  const pendingQrReminders = new Map<string, { label: string; bizId: string; href: string }>();
+  const baseTitle = typeof document === "undefined" ? copy.app.title : document.title || copy.app.title;
 
   const accountsTotal = computed(() => details.value.length);
   const runningTotal = computed(
@@ -48,12 +57,72 @@ export function useDashboard() {
     text: string,
     tone: BannerTone = "success",
     link?: { text: string; href: string },
+    links?: StatusBannerLink[],
   ) {
-    banner.value = { text, tone, linkText: link?.text, linkHref: link?.href };
+    banner.value = { text, tone, linkText: link?.text, linkHref: link?.href, links };
   }
 
   function clearBanner() {
     banner.value = null;
+    pendingQrReminders.clear();
+    stopTitleReminder();
+  }
+
+  function stopTitleReminder() {
+    if (titleTimer) {
+      window.clearInterval(titleTimer);
+      titleTimer = undefined;
+    }
+    if (typeof document !== "undefined") {
+      document.title = baseTitle;
+    }
+  }
+
+  function startTitleReminder(count: number) {
+    if (typeof document === "undefined") {
+      return;
+    }
+    stopTitleReminder();
+    let active = true;
+    const alertTitle = count > 1 ? `(${count}) 支付二维码已生成` : "支付二维码已生成";
+    document.title = alertTitle;
+    titleTimer = window.setInterval(() => {
+      document.title = active ? alertTitle : baseTitle;
+      active = !active;
+    }, 900);
+  }
+
+  function playQrBeep(count: number) {
+    const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextCtor) {
+      return;
+    }
+    try {
+      const audio = new AudioContextCtor();
+      const beepCount = Math.min(Math.max(count, 1), 3);
+      for (let i = 0; i < beepCount; i += 1) {
+        const oscillator = audio.createOscillator();
+        const gain = audio.createGain();
+        const startAt = audio.currentTime + i * 0.22;
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(880, startAt);
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.exponentialRampToValueAtTime(0.18, startAt + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.16);
+        oscillator.connect(gain);
+        gain.connect(audio.destination);
+        oscillator.start(startAt);
+        oscillator.stop(startAt + 0.18);
+      }
+      window.setTimeout(() => void audio.close().catch(() => undefined), 1200);
+    } catch {
+      // Browser autoplay policies can block audio before user interaction.
+    }
+  }
+
+  function triggerQrAttention(count: number) {
+    startTitleReminder(count);
+    playQrBeep(count);
   }
 
   function qrTaskKey(detail: AccountDetailResponse) {
@@ -97,23 +166,39 @@ export function useDashboard() {
       return false;
     }
 
-    const labels = newQrDetails.map(
-      (detail) => detail.account.label || detail.account.id,
-    );
-    const firstTask = newQrDetails[0]?.tasks?.[0];
+    for (const detail of newQrDetails) {
+      const key = qrTaskKey(detail);
+      const href = qrImageUrl(detail);
+      if (!key || !href) {
+        continue;
+      }
+      pendingQrReminders.set(key, {
+        label: detail.account.label || detail.account.id,
+        bizId: detail.tasks?.[0]?.biz_id || "",
+        href,
+      });
+    }
+
+    const reminders = Array.from(pendingQrReminders.values());
+    const labels = reminders.map((item) => item.label);
     const text =
-      newQrDetails.length === 1
-        ? copy.feedback.qrGenerated(labels[0], firstTask?.biz_id || "")
+      reminders.length === 1
+        ? copy.feedback.qrGenerated(labels[0], reminders[0]?.bizId || "")
         : copy.feedback.qrGeneratedBatch(
-            newQrDetails.length,
-            labels.slice(0, 3).join("、"),
+            reminders.length,
+            labels.slice(0, 4).join("、"),
           );
-    const qrUrl = newQrDetails.length === 1 ? qrImageUrl(newQrDetails[0]) : "";
+    const links = reminders.map((item) => ({
+      text: copy.feedback.openQrFor(item.label),
+      href: item.href,
+    }));
     setBanner(
       text,
       "warning",
-      qrUrl ? { text: copy.feedback.openQr, href: qrUrl } : undefined,
+      links.length === 1 ? { text: copy.feedback.openQr, href: links[0].href } : undefined,
+      links.length > 1 ? links : undefined,
     );
+    triggerQrAttention(newQrDetails.length);
     return true;
   }
 
@@ -159,6 +244,14 @@ export function useDashboard() {
       window.clearInterval(pollTimer);
       pollTimer = undefined;
     }
+  }
+
+  function handleWindowFocus() {
+    stopTitleReminder();
+  }
+
+  if (typeof window !== "undefined") {
+    window.addEventListener("focus", handleWindowFocus);
   }
 
   async function runAction(
@@ -234,7 +327,11 @@ export function useDashboard() {
     );
   }
 
-  onBeforeUnmount(stopPolling);
+  onBeforeUnmount(() => {
+    stopPolling();
+    stopTitleReminder();
+    window.removeEventListener("focus", handleWindowFocus);
+  });
 
   return {
     actionKey,
