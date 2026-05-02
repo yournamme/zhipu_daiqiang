@@ -5,11 +5,13 @@ cd /d %~dp0
 
 set "APP_HOST=127.0.0.1"
 set "APP_PORT=8787"
+set "FALLBACK_PROXY_URL="
 
 if exist .env (
     for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
         if /i "%%A"=="APP_HOST" set "APP_HOST=%%B"
         if /i "%%A"=="APP_PORT" set "APP_PORT=%%B"
+        if /i "%%A"=="FALLBACK_PROXY_URL" set "FALLBACK_PROXY_URL=%%B"
     )
 )
 
@@ -47,19 +49,32 @@ if exist web\package.json (
     )
 )
 REM ── Dynamic Proxy (optional) ─────────────────────────────────────────────────
-REM If dynamic-proxy\dynamic-proxy.exe exists, start it in a background window.
-REM Set FALLBACK_PROXY_URL=http://127.0.0.1:17286 in .env to route all accounts
-REM (that have no per-account proxy_url) through the rotating proxy pool.
-if exist dynamic-proxy\dynamic-proxy.exe (
-    echo [glmDesk] Starting dynamic-proxy in background...
-    pushd dynamic-proxy
-    start "glmDesk-dynamic-proxy" /B dynamic-proxy.exe > ..\.dynamic-proxy.log 2>&1
-    popd
-    echo [glmDesk] dynamic-proxy started. Log: .dynamic-proxy.log
-    echo [glmDesk] Add FALLBACK_PROXY_URL=http://127.0.0.1:17286 to .env to enable proxy rotation.
+REM dynamic-proxy is only needed when FALLBACK_PROXY_URL points to the local proxy pool.
+REM Without FALLBACK_PROXY_URL, GLM Desk runs direct network requests and ignores KDL_/PROXY_POOL_ settings.
+set "SHOULD_START_DYNAMIC_PROXY=0"
+if not "%FALLBACK_PROXY_URL%"=="" (
+    echo %FALLBACK_PROXY_URL% | findstr /I /C:"127.0.0.1:1728" /C:"localhost:1728" >nul
+    if not errorlevel 1 set "SHOULD_START_DYNAMIC_PROXY=1"
+)
+
+if "%SHOULD_START_DYNAMIC_PROXY%"=="1" (
+    if exist dynamic-proxy\dynamic-proxy.exe (
+        echo [glmDesk] Starting dynamic-proxy in background for FALLBACK_PROXY_URL=%FALLBACK_PROXY_URL% ...
+        pushd dynamic-proxy
+        start "glmDesk-dynamic-proxy" /B dynamic-proxy.exe > ..\.dynamic-proxy.log 2>&1
+        popd
+        echo [glmDesk] dynamic-proxy started. Log: .dynamic-proxy.log
+    ) else (
+        echo [glmDesk] FALLBACK_PROXY_URL points to local dynamic-proxy, but dynamic-proxy.exe was not found.
+        echo [glmDesk] Build it with: cd dynamic-proxy ^&^& go build -o dynamic-proxy.exe
+        echo [glmDesk] FastAPI will still start, but proxy health will be degraded until dynamic-proxy is available.
+    )
 ) else (
-    echo [glmDesk] dynamic-proxy.exe not found, skipping proxy rotation.
-    echo [glmDesk] Build it with: cd dynamic-proxy ^&^& go build -o dynamic-proxy.exe
+    if "%FALLBACK_PROXY_URL%"=="" (
+        echo [glmDesk] FALLBACK_PROXY_URL is empty; skipping dynamic-proxy. Direct network mode is enabled.
+    ) else (
+        echo [glmDesk] FALLBACK_PROXY_URL=%FALLBACK_PROXY_URL% does not point to local dynamic-proxy; skipping local dynamic-proxy startup.
+    )
 )
 REM ── FastAPI server ─────────────────────────────────────────────────────────────
 echo [glmDesk] Starting FastAPI server...

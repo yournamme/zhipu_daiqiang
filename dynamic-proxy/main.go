@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,10 +46,282 @@ type Config struct {
 
 // Global config variable
 var config Config
+var runtimeEnv envFileConfig
 
 // Simple regex to extract ip:port from any format (used for special proxy lists)
 // Matches: [IP]:[port] and ignores any protocol prefixes or extra text
 var simpleProxyRegex = regexp.MustCompile(`([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):([0-9]{1,5})`)
+
+type proxyHealth struct {
+	Addr    string
+	Latency time.Duration
+}
+
+type envFileConfig struct {
+	KDLWhiteIPEnabled               bool
+	KDLSecretID                     string
+	KDLSecretKey                    string
+	KDLSecretTokenAPI               string
+	KDLSignature                    string
+	KDLWhiteIPAPI                   string
+	KDLWhiteIPList                  string
+	KDLWhiteIPWaitSeconds           int
+	ProxyPoolMaxLatencyMS           int
+	ProxyPoolFastWindow             int
+	ProxyPoolFailureCooldownSeconds int
+}
+
+func loadDotEnvFile(path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("Warning: failed to open env file %s: %v", path, err)
+		}
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		value = strings.Trim(value, `"'`)
+		if key == "" || os.Getenv(key) != "" {
+			continue
+		}
+		if err := os.Setenv(key, value); err != nil {
+			log.Printf("Warning: failed to set env %s from %s: %v", key, path, err)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("Warning: failed to read env file %s: %v", path, err)
+	}
+}
+
+func loadDotEnvFiles() {
+	loadDotEnvFile("../.env")
+	loadDotEnvFile(".env")
+}
+
+func getenvDefault(key string, defaultValue string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func getenvBool(key string, defaultValue bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return defaultValue
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func getenvInt(key string, defaultValue int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Printf("Warning: invalid %s=%q, using default %d", key, value, defaultValue)
+		return defaultValue
+	}
+	return parsed
+}
+
+func loadEnvConfig() envFileConfig {
+	return envFileConfig{
+		KDLWhiteIPEnabled:               getenvBool("KDL_WHITEIP_ENABLED", false),
+		KDLSecretID:                     getenvDefault("KDL_SECRET_ID", ""),
+		KDLSecretKey:                    getenvDefault("KDL_SECRET_KEY", ""),
+		KDLSecretTokenAPI:               getenvDefault("KDL_SECRET_TOKEN_API", "https://auth.kdlapi.com/api/get_secret_token"),
+		KDLSignature:                    getenvDefault("KDL_SIGNATURE", ""),
+		KDLWhiteIPAPI:                   getenvDefault("KDL_WHITEIP_API", "https://dev.kdlapi.com/api/addwhiteip"),
+		KDLWhiteIPList:                  getenvDefault("KDL_WHITEIP_LIST", ""),
+		KDLWhiteIPWaitSeconds:           getenvInt("KDL_WHITEIP_WAIT_SECONDS", 65),
+		ProxyPoolMaxLatencyMS:           getenvInt("PROXY_POOL_MAX_LATENCY_MS", 3000),
+		ProxyPoolFastWindow:             getenvInt("PROXY_POOL_FAST_WINDOW", 32),
+		ProxyPoolFailureCooldownSeconds: getenvInt("PROXY_POOL_FAILURE_COOLDOWN_SECONDS", 60),
+	}
+}
+
+func getKDLSecretToken(client *http.Client, envCfg envFileConfig) (string, bool) {
+	if envCfg.KDLSecretKey == "" {
+		return envCfg.KDLSignature, envCfg.KDLSignature != ""
+	}
+	if envCfg.KDLSecretID == "" {
+		log.Println("[KDL] KDL_SECRET_KEY is set but KDL_SECRET_ID is empty, cannot fetch secret token")
+		return "", false
+	}
+	values := url.Values{}
+	values.Set("secret_id", envCfg.KDLSecretID)
+	values.Set("secret_key", envCfg.KDLSecretKey)
+
+	log.Println("[KDL] Fetching KuaiDaili secret_token with SecretId/SecretKey...")
+	resp, err := client.PostForm(envCfg.KDLSecretTokenAPI, values)
+	if err != nil {
+		log.Printf("[KDL] Failed to fetch secret_token: %v", err)
+		return "", false
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		log.Printf("[KDL] get_secret_token status=%d, failed to read response: %v", resp.StatusCode, err)
+		return "", false
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Printf("[KDL] get_secret_token returned status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", false
+	}
+
+	var apiResp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			SecretToken string `json:"secret_token"`
+			Expire      int    `json:"expire"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		log.Printf("[KDL] Failed to parse get_secret_token response: %v", err)
+		return "", false
+	}
+	if apiResp.Code != 0 || apiResp.Data.SecretToken == "" {
+		log.Printf("[KDL] get_secret_token failed with code=%d msg=%s", apiResp.Code, apiResp.Msg)
+		return "", false
+	}
+	log.Printf("[KDL] secret_token fetched successfully, expire=%ds", apiResp.Data.Expire)
+	return apiResp.Data.SecretToken, true
+}
+
+func addKDLWhiteIP(envCfg envFileConfig) {
+	if !envCfg.KDLWhiteIPEnabled {
+		return
+	}
+	if envCfg.KDLSecretID == "" {
+		log.Println("[KDL] WhiteIP is enabled but KDL_SECRET_ID is empty, skipping")
+		return
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	signature, ok := getKDLSecretToken(client, envCfg)
+	if !ok {
+		log.Println("[KDL] No usable secret_token/signature, skipping AddWhiteIP")
+		return
+	}
+
+	endpoint, err := url.Parse(envCfg.KDLWhiteIPAPI)
+	if err != nil {
+		log.Printf("[KDL] Invalid KDL_WHITEIP_API %q: %v", envCfg.KDLWhiteIPAPI, err)
+		return
+	}
+	query := endpoint.Query()
+	query.Set("secret_id", envCfg.KDLSecretID)
+	query.Set("signature", signature)
+	query.Set("sign_type", "token")
+	if envCfg.KDLWhiteIPList != "" {
+		query.Set("iplist", envCfg.KDLWhiteIPList)
+	}
+	endpoint.RawQuery = query.Encode()
+
+	log.Println("[KDL] Adding current server IP to KuaiDaili whitelist...")
+	resp, err := client.Get(endpoint.String())
+	if err != nil {
+		log.Printf("[KDL] Failed to call AddWhiteIP API: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		log.Printf("[KDL] AddWhiteIP status=%d, failed to read response: %v", resp.StatusCode, err)
+		return
+	}
+	bodyText := strings.TrimSpace(string(body))
+	log.Printf("[KDL] AddWhiteIP status=%d response=%s", resp.StatusCode, bodyText)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		log.Println("[KDL] AddWhiteIP returned non-2xx status, proxy fetching will continue and may fail if whitelist is not ready")
+		return
+	}
+	var apiResp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(body, &apiResp); err == nil && apiResp.Code != 0 {
+		log.Printf("[KDL] AddWhiteIP failed with code=%d msg=%s, proxy fetching will continue", apiResp.Code, apiResp.Msg)
+		return
+	}
+	if envCfg.KDLWhiteIPWaitSeconds > 0 {
+		log.Printf("[KDL] Waiting %d seconds for whitelist propagation...", envCfg.KDLWhiteIPWaitSeconds)
+		time.Sleep(time.Duration(envCfg.KDLWhiteIPWaitSeconds) * time.Second)
+	}
+}
+
+func sortProxyHealth(items []proxyHealth) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Latency == items[j].Latency {
+			return items[i].Addr < items[j].Addr
+		}
+		return items[i].Latency < items[j].Latency
+	})
+}
+
+func proxyAddrs(items []proxyHealth) []string {
+	result := make([]string, len(items))
+	for i, item := range items {
+		result[i] = item.Addr
+	}
+	return result
+}
+
+func filterProxyHealthByLatency(items []proxyHealth, maxLatencyMS int) []proxyHealth {
+	if maxLatencyMS <= 0 {
+		return items
+	}
+	maxLatency := time.Duration(maxLatencyMS) * time.Millisecond
+	filtered := items[:0]
+	for _, item := range items {
+		if item.Latency <= maxLatency {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func logProxyLatencySummary(mode string, items []proxyHealth) {
+	if len(items) == 0 {
+		return
+	}
+	var total time.Duration
+	for _, item := range items {
+		total += item.Latency
+	}
+	avg := total / time.Duration(len(items))
+	fastest := items[0]
+	slowest := items[len(items)-1]
+	log.Printf("[%s] Latency sorted: count=%d fastest=%s/%dms slowest=%s/%dms avg=%dms",
+		mode,
+		len(items),
+		fastest.Addr,
+		fastest.Latency.Milliseconds(),
+		slowest.Addr,
+		slowest.Latency.Milliseconds(),
+		avg.Milliseconds(),
+	)
+}
 
 // loadConfig loads configuration from config.yaml
 func loadConfig(filename string) (*Config, error) {
@@ -92,28 +368,65 @@ func loadConfig(filename string) (*Config, error) {
 }
 
 type ProxyPool struct {
-	proxies  []string
-	mu       sync.RWMutex
-	index    uint64
-	updating int32 // atomic flag to prevent concurrent updates
+	proxies       []string
+	mu            sync.RWMutex
+	index         uint64
+	window        int
+	cooldownUntil map[string]time.Time
+	updating      int32 // atomic flag to prevent concurrent updates
 }
 
 func NewProxyPool() *ProxyPool {
 	return &ProxyPool{
-		proxies: make([]string, 0),
+		proxies:       make([]string, 0),
+		cooldownUntil: make(map[string]time.Time),
 	}
 }
 
-func (p *ProxyPool) Update(proxies []string) {
+func (p *ProxyPool) Update(proxies []string, fastWindow int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	oldCount := len(p.proxies)
 	p.proxies = proxies
+	p.window = fastWindow
+	nextCooldown := make(map[string]time.Time)
+	for _, proxyAddr := range proxies {
+		if until, ok := p.cooldownUntil[proxyAddr]; ok && until.After(time.Now()) {
+			nextCooldown[proxyAddr] = until
+		}
+	}
+	p.cooldownUntil = nextCooldown
 	// Reset index to 0 to avoid out-of-bounds issues
 	atomic.StoreUint64(&p.index, 0)
 
-	log.Printf("Proxy pool updated: %d -> %d active proxies", oldCount, len(proxies))
+	activeWindow := p.activeWindowLocked()
+	log.Printf("Proxy pool updated: %d -> %d active proxies (fast_window=%d)", oldCount, len(proxies), activeWindow)
+}
+
+func (p *ProxyPool) activeWindowLocked() int {
+	if len(p.proxies) == 0 {
+		return 0
+	}
+	if p.window <= 0 || p.window > len(p.proxies) {
+		return len(p.proxies)
+	}
+	return p.window
+}
+
+func (p *ProxyPool) MarkFailure(proxyAddr string) {
+	cooldownSeconds := runtimeEnv.ProxyPoolFailureCooldownSeconds
+	if cooldownSeconds <= 0 || proxyAddr == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cooldownUntil == nil {
+		p.cooldownUntil = make(map[string]time.Time)
+	}
+	until := time.Now().Add(time.Duration(cooldownSeconds) * time.Second)
+	p.cooldownUntil[proxyAddr] = until
+	log.Printf("Proxy %s cooled down for %ds after failure", proxyAddr, cooldownSeconds)
 }
 
 func (p *ProxyPool) GetNext() (string, error) {
@@ -124,7 +437,21 @@ func (p *ProxyPool) GetNext() (string, error) {
 		return "", fmt.Errorf("no available proxies")
 	}
 
-	idx := atomic.AddUint64(&p.index, 1) % uint64(len(p.proxies))
+	activeWindow := p.activeWindowLocked()
+	now := time.Now()
+	for attempts := 0; attempts < activeWindow; attempts++ {
+		idx := (atomic.AddUint64(&p.index, 1) - 1) % uint64(activeWindow)
+		proxyAddr := p.proxies[idx]
+		until, cooling := p.cooldownUntil[proxyAddr]
+		if !cooling || !until.After(now) {
+			if cooling {
+				delete(p.cooldownUntil, proxyAddr)
+			}
+			return proxyAddr, nil
+		}
+	}
+	log.Println("All proxies in fast window are cooling down, falling back to the full pool")
+	idx := (atomic.AddUint64(&p.index, 1) - 1) % uint64(len(p.proxies))
 	return p.proxies[idx], nil
 }
 
@@ -292,7 +619,7 @@ func fetchProxyList() ([]string, error) {
 	return allProxies, nil
 }
 
-func checkProxyHealth(proxyAddr string, strictMode bool) bool {
+func checkProxyHealth(proxyAddr string, strictMode bool) (time.Duration, bool) {
 	// Create a context with timeout from config
 	totalTimeout := time.Duration(config.HealthCheck.TotalTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), totalTimeout)
@@ -300,11 +627,15 @@ func checkProxyHealth(proxyAddr string, strictMode bool) bool {
 
 	dialer, err := proxy.SOCKS5("tcp", proxyAddr, nil, proxy.Direct)
 	if err != nil {
-		return false
+		return 0, false
 	}
 
 	// Use a channel to handle timeout
-	done := make(chan bool, 1)
+	type checkResult struct {
+		latency time.Duration
+		ok      bool
+	}
+	done := make(chan checkResult, 1)
 	go func() {
 		// Test HTTPS connection to verify TLS handshake works and is fast
 		start := time.Now()
@@ -315,7 +646,7 @@ func checkProxyHealth(proxyAddr string, strictMode bool) bool {
 		}
 		conn, err := dialer.Dial("tcp", target)
 		if err != nil {
-			done <- false
+			done <- checkResult{ok: false}
 			return
 		}
 		defer conn.Close()
@@ -332,7 +663,7 @@ func checkProxyHealth(proxyAddr string, strictMode bool) bool {
 
 		err = tlsConn.Handshake()
 		if err != nil {
-			done <- false
+			done <- checkResult{ok: false}
 			return
 		}
 		tlsConn.Close()
@@ -342,32 +673,32 @@ func checkProxyHealth(proxyAddr string, strictMode bool) bool {
 		threshold := time.Duration(config.HealthCheck.TLSHandshakeThresholdSeconds) * time.Second
 		if elapsed > threshold {
 			// Too slow, reject this proxy
-			done <- false
+			done <- checkResult{latency: elapsed, ok: false}
 			return
 		}
 
-		done <- true
+		done <- checkResult{latency: elapsed, ok: true}
 	}()
 
 	select {
 	case result := <-done:
-		return result
+		return result.latency, result.ok
 	case <-ctx.Done():
-		return false
+		return 0, false
 	}
 }
 
 // HealthCheckResult holds the results of health check for both modes
 type HealthCheckResult struct {
-	Strict  []string
-	Relaxed []string
+	Strict  []proxyHealth
+	Relaxed []proxyHealth
 }
 
 func healthCheckProxies(proxies []string) HealthCheckResult {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	strictHealthy := make([]string, 0)
-	relaxedHealthy := make([]string, 0)
+	strictHealthy := make([]proxyHealth, 0)
+	relaxedHealthy := make([]proxyHealth, 0)
 
 	total := len(proxies)
 	var checked int64
@@ -420,22 +751,22 @@ func healthCheckProxies(proxies []string) HealthCheckResult {
 			defer func() { <-semaphore }()
 
 			// Optimized: check strict mode first
-			strictOK := checkProxyHealth(addr, true)
+			strictLatency, strictOK := checkProxyHealth(addr, true)
 
 			if strictOK {
 				// If strict mode passes, relaxed mode must pass too
 				mu.Lock()
-				strictHealthy = append(strictHealthy, addr)
-				relaxedHealthy = append(relaxedHealthy, addr)
+				strictHealthy = append(strictHealthy, proxyHealth{Addr: addr, Latency: strictLatency})
+				relaxedHealthy = append(relaxedHealthy, proxyHealth{Addr: addr, Latency: strictLatency})
 				mu.Unlock()
 				atomic.AddInt64(&strictCount, 1)
 				atomic.AddInt64(&relaxedCount, 1)
 			} else {
 				// Strict mode failed, try relaxed mode
-				relaxedOK := checkProxyHealth(addr, false)
+				relaxedLatency, relaxedOK := checkProxyHealth(addr, false)
 				if relaxedOK {
 					mu.Lock()
-					relaxedHealthy = append(relaxedHealthy, addr)
+					relaxedHealthy = append(relaxedHealthy, proxyHealth{Addr: addr, Latency: relaxedLatency})
 					mu.Unlock()
 					atomic.AddInt64(&relaxedCount, 1)
 				}
@@ -450,6 +781,24 @@ func healthCheckProxies(proxies []string) HealthCheckResult {
 	// Final progress update
 	log.Printf("[%s] %d/%d (100.0%%) | Strict: %d | Relaxed: %d",
 		strings.Repeat("█", 40), total, total, len(strictHealthy), len(relaxedHealthy))
+
+	sortProxyHealth(strictHealthy)
+	sortProxyHealth(relaxedHealthy)
+	logProxyLatencySummary("STRICT", strictHealthy)
+	logProxyLatencySummary("RELAXED", relaxedHealthy)
+	strictBeforeFilter := len(strictHealthy)
+	relaxedBeforeFilter := len(relaxedHealthy)
+	strictHealthy = filterProxyHealthByLatency(strictHealthy, runtimeEnv.ProxyPoolMaxLatencyMS)
+	relaxedHealthy = filterProxyHealthByLatency(relaxedHealthy, runtimeEnv.ProxyPoolMaxLatencyMS)
+	if runtimeEnv.ProxyPoolMaxLatencyMS > 0 {
+		log.Printf("Proxy latency cutoff applied: max=%dms | Strict: %d -> %d | Relaxed: %d -> %d",
+			runtimeEnv.ProxyPoolMaxLatencyMS,
+			strictBeforeFilter,
+			len(strictHealthy),
+			relaxedBeforeFilter,
+			len(relaxedHealthy),
+		)
+	}
 
 	return HealthCheckResult{
 		Strict:  strictHealthy,
@@ -477,7 +826,7 @@ func updateProxyPool(strictPool *ProxyPool, relaxedPool *ProxyPool) {
 
 	// Update strict pool
 	if len(result.Strict) > 0 {
-		strictPool.Update(result.Strict)
+		strictPool.Update(proxyAddrs(result.Strict), runtimeEnv.ProxyPoolFastWindow)
 		log.Printf("[STRICT] Pool updated with %d healthy proxies", len(result.Strict))
 	} else {
 		log.Println("[STRICT] Warning: No healthy proxies found, keeping existing pool")
@@ -485,7 +834,7 @@ func updateProxyPool(strictPool *ProxyPool, relaxedPool *ProxyPool) {
 
 	// Update relaxed pool
 	if len(result.Relaxed) > 0 {
-		relaxedPool.Update(result.Relaxed)
+		relaxedPool.Update(proxyAddrs(result.Relaxed), runtimeEnv.ProxyPoolFastWindow)
 		log.Printf("[RELAXED] Pool updated with %d healthy proxies", len(result.Relaxed))
 	} else {
 		log.Println("[RELAXED] Warning: No healthy proxies found, keeping existing pool")
@@ -578,6 +927,7 @@ func (d *CustomDialer) Dial(ctx context.Context, network, addr string) (net.Conn
 	conn, err := dialer.Dial(network, addr)
 	if err != nil {
 		log.Printf("[SOCKS5-%s] ERROR: Failed to connect to %s via proxy %s: %v", d.mode, addr, proxyAddr, err)
+		d.pool.MarkFailure(proxyAddr)
 		return nil, fmt.Errorf("failed to dial through proxy %s: %w", proxyAddr, err)
 	}
 
@@ -638,7 +988,7 @@ func handleHTTPProxy(w http.ResponseWriter, r *http.Request, pool *ProxyPool, mo
 
 	// Handle CONNECT method for HTTPS
 	if r.Method == http.MethodConnect {
-		handleHTTPSProxy(w, r, dialer, proxyAddr, mode)
+		handleHTTPSProxy(w, r, pool, dialer, proxyAddr, mode)
 		return
 	}
 
@@ -673,6 +1023,7 @@ func handleHTTPProxy(w http.ResponseWriter, r *http.Request, pool *ProxyPool, mo
 	resp, err := client.Do(proxyReq)
 	if err != nil {
 		log.Printf("[HTTP-%s] ERROR: Request failed for %s: %v", mode, r.URL.String(), err)
+		pool.MarkFailure(proxyAddr)
 		http.Error(w, fmt.Sprintf("Proxy request failed: %v", err), http.StatusBadGateway)
 		return
 	}
@@ -691,7 +1042,7 @@ func handleHTTPProxy(w http.ResponseWriter, r *http.Request, pool *ProxyPool, mo
 	io.Copy(w, resp.Body)
 }
 
-func handleHTTPSProxy(w http.ResponseWriter, r *http.Request, dialer proxy.Dialer, proxyAddr string, mode string) {
+func handleHTTPSProxy(w http.ResponseWriter, r *http.Request, pool *ProxyPool, dialer proxy.Dialer, proxyAddr string, mode string) {
 	log.Printf("[HTTPS-%s] Connecting to %s via proxy %s", mode, r.Host, proxyAddr)
 
 	// Connect to target through SOCKS5 proxy with a hard timeout so a hanging
@@ -712,12 +1063,14 @@ func handleHTTPSProxy(w http.ResponseWriter, r *http.Request, dialer proxy.Diale
 	case res := <-ch:
 		if res.err != nil {
 			log.Printf("[HTTPS-%s] ERROR: Failed to connect to %s via proxy %s: %v", mode, r.Host, proxyAddr, res.err)
+			pool.MarkFailure(proxyAddr)
 			http.Error(w, "Failed to connect to target", http.StatusBadGateway)
 			return
 		}
 		targetConn = res.conn
 	case <-time.After(upstreamTimeout):
 		log.Printf("[HTTPS-%s] TIMEOUT: upstream proxy %s took >%s for %s", mode, proxyAddr, upstreamTimeout, r.Host)
+		pool.MarkFailure(proxyAddr)
 		http.Error(w, "Upstream proxy timeout", http.StatusGatewayTimeout)
 		return
 	}
@@ -776,6 +1129,10 @@ func startHTTPServer(pool *ProxyPool, port string, mode string) error {
 
 func main() {
 	log.Println("Starting Dynamic Proxy Server...")
+	loadDotEnvFiles()
+	envCfg := loadEnvConfig()
+	runtimeEnv = envCfg
+	addKDLWhiteIP(envCfg)
 
 	// Load configuration
 	cfg, err := loadConfig("config.yaml")
@@ -799,6 +1156,9 @@ func main() {
 	log.Printf("  - SOCKS5 Relaxed port: %s", config.Ports.SOCKS5Relaxed)
 	log.Printf("  - HTTP Strict port: %s", config.Ports.HTTPStrict)
 	log.Printf("  - HTTP Relaxed port: %s", config.Ports.HTTPRelaxed)
+	log.Printf("  - Proxy pool max latency: %dms", runtimeEnv.ProxyPoolMaxLatencyMS)
+	log.Printf("  - Proxy pool fast window: %d", runtimeEnv.ProxyPoolFastWindow)
+	log.Printf("  - Proxy pool failure cooldown: %ds", runtimeEnv.ProxyPoolFailureCooldownSeconds)
 
 	// Create two proxy pools
 	strictPool := NewProxyPool()

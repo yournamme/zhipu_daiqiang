@@ -118,6 +118,28 @@ go build -o dynamic-proxy.exe
 FALLBACK_PROXY_URL=http://127.0.0.1:17286
 ```
 
+只有配置了 `FALLBACK_PROXY_URL`，GLM Desk 才会走代理池模式。`start.bat` 也只会在 `FALLBACK_PROXY_URL` 指向本地 `dynamic-proxy` 端口（例如 `127.0.0.1:17286`）时启动 `dynamic-proxy`；如果该值为空，则直接跳过代理池，`KDL_*` 和 `PROXY_POOL_*` 参数不会参与主链路。
+
+如果使用快代理 DPS，可以让 `dynamic-proxy` 启动时自动调用快代理白名单接口，再拉取代理池：
+
+```env
+KDL_WHITEIP_ENABLED=1
+KDL_SECRET_ID=your_secret_id
+KDL_SECRET_KEY=your_secret_key
+KDL_SECRET_TOKEN_API=https://auth.kdlapi.com/api/get_secret_token
+KDL_SIGNATURE=
+KDL_WHITEIP_API=https://dev.kdlapi.com/api/addwhiteip
+KDL_WHITEIP_LIST=
+KDL_WHITEIP_WAIT_SECONDS=65
+PROXY_POOL_MAX_LATENCY_MS=3000
+PROXY_POOL_FAST_WINDOW=32
+PROXY_POOL_FAILURE_COOLDOWN_SECONDS=60
+```
+
+启动时会先用 `KDL_SECRET_ID` + `KDL_SECRET_KEY` 调用快代理 `get_secret_token` 获取动态 `secret_token`，再以 `sign_type=token` 调用 AddWhiteIP。`KDL_SIGNATURE` 仅作为旧配置兼容字段；如果已经配置 `KDL_SECRET_KEY`，无需再手动填写 `KDL_SIGNATURE`。
+
+`KDL_WHITEIP_LIST` 留空时，快代理会把当前调用机器的公网 IP 加入白名单；如果要显式指定多个 IP，按快代理接口要求填写 `iplist`。快代理白名单通常需要约 1 分钟生效，所以默认等待 `65` 秒后再拉取代理池。白名单接口失败不会阻断 GLM Desk 主服务启动，但 `dynamic-proxy` 日志会记录 `[KDL]` 开头的错误，后续代理池拉取可能因为白名单未生效而失败。
+
 端口含义：
 
 - `http://127.0.0.1:17285`：HTTP strict，本地代理服务会验证上游 TLS
@@ -179,6 +201,10 @@ start.bat
 ```
 
 这样运行时才是：先用 `proxy_checker.py` 过滤出 `good_proxies.txt`，再由 `dynamic-proxy` 读取该文件并维护代理池，最后 GLM Desk 通过 `FALLBACK_PROXY_URL` 走这个代理池。
+
+`dynamic-proxy` 每次启动和定时刷新代理池时都会重新健康检测代理，并按 TLS 连接耗时从快到慢排序。业务请求会从最快代理开始轮询，日志里会输出 `Latency sorted`，包含最快、最慢和平均耗时，方便判断代理池质量。
+
+代理池调度可以通过 `.env` 控制：`PROXY_POOL_MAX_LATENCY_MS` 会在健康检测后丢弃超过阈值的慢代理；`PROXY_POOL_FAST_WINDOW` 会让运行时只在最快前 N 个代理里轮询；`PROXY_POOL_FAILURE_COOLDOWN_SECONDS` 会在某个代理连接失败或超时后临时冷却，避免继续把请求分给明显有问题的出口。
 
 ### 代理配置建议
 
