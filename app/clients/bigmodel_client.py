@@ -58,6 +58,7 @@ class BigModelClient:
         invitation_code: str,
         ticket: str,
         randstr: str,
+        allow_fallback_proxy: bool = False,
     ) -> ApiCallResult:
         return self._request(
             account,
@@ -70,6 +71,7 @@ class BigModelClient:
                 "ticket": ticket,
                 "randstr": randstr,
             },
+            allow_fallback_proxy=allow_fallback_proxy,
         )
 
     def create_sign(
@@ -148,6 +150,7 @@ class BigModelClient:
         *,
         json_body: Any | None = None,
         params: dict[str, Any] | None = None,
+        allow_fallback_proxy: bool = False,
     ) -> ApiCallResult:
         token = account.token.strip() or account.cookies.get("bigmodel_token_production", "").strip()
         if not token:
@@ -167,6 +170,7 @@ class BigModelClient:
             json_body=json_body,
             params=params,
             proxy_url=account.proxy_url or None,
+            allow_fallback_proxy=allow_fallback_proxy,
             user_agent=resolve_user_agent(account.user_agent, account.browser_impersonate),
             browser_impersonate=account.browser_impersonate or None,
         )

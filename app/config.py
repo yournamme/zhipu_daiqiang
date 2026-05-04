@@ -49,6 +49,7 @@ class Settings:
     ticket_pool_drain_jitter_ms: int
     ticket_pool_drain_mode: str
     fallback_proxy_url: str  # when set, used for accounts without their own proxy_url
+    fallback_proxy_ticket_pool_only: bool
 
 
 @lru_cache(maxsize=1)
@@ -151,6 +152,7 @@ def get_settings() -> Settings:
             choices={"serial", "parallel"},
         ),
         fallback_proxy_url=os.getenv("FALLBACK_PROXY_URL", "").strip(),
+        fallback_proxy_ticket_pool_only=_parse_bool(os.getenv("FALLBACK_PROXY_TICKET_POOL_ONLY", "0")),
     )
 
 

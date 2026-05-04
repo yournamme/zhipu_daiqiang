@@ -48,6 +48,7 @@ class FingerprintHttpClient:
         form_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         proxy_url: str | None = None,
+        allow_fallback_proxy: bool = False,
         user_agent: str | None = None,
         browser_impersonate: str | None = None,
         sec_fetch_site: str = "same-origin",
@@ -70,6 +71,7 @@ class FingerprintHttpClient:
             form_body=form_body,
             params=params,
             proxy_url=proxy_url,
+            allow_fallback_proxy=allow_fallback_proxy,
             browser_impersonate=browser_impersonate,
         )
         return self._decode_response(response=response, url=url)
@@ -84,6 +86,7 @@ class FingerprintHttpClient:
         form_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         proxy_url: str | None = None,
+        allow_fallback_proxy: bool = False,
         user_agent: str | None = None,
         browser_impersonate: str | None = None,
         sec_fetch_site: str = "same-origin",
@@ -106,6 +109,7 @@ class FingerprintHttpClient:
             form_body=form_body,
             params=params,
             proxy_url=proxy_url,
+            allow_fallback_proxy=allow_fallback_proxy,
             browser_impersonate=browser_impersonate,
         )
         self._ensure_success(response=response, url=url)
@@ -121,6 +125,7 @@ class FingerprintHttpClient:
         form_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         proxy_url: str | None = None,
+        allow_fallback_proxy: bool = False,
         user_agent: str | None = None,
         browser_impersonate: str | None = None,
         sec_fetch_site: str = "same-origin",
@@ -143,6 +148,7 @@ class FingerprintHttpClient:
             form_body=form_body,
             params=params,
             proxy_url=proxy_url,
+            allow_fallback_proxy=allow_fallback_proxy,
             browser_impersonate=browser_impersonate,
         )
         self._ensure_success(response=response, url=url)
@@ -285,6 +291,7 @@ class FingerprintHttpClient:
         form_body: dict[str, Any] | None,
         params: dict[str, Any] | None,
         proxy_url: str | None,
+        allow_fallback_proxy: bool,
         browser_impersonate: str | None,
     ):
         if json_body is not None and form_body is not None:
@@ -311,7 +318,10 @@ class FingerprintHttpClient:
                     kwargs["json"] = json_body
                 if form_body is not None:
                     kwargs["data"] = form_body
-                effective_proxy = proxy_url or self.settings.fallback_proxy_url
+                effective_proxy = self._resolve_effective_proxy(
+                    proxy_url,
+                    allow_fallback_proxy=allow_fallback_proxy,
+                )
                 if effective_proxy:
                     kwargs["proxies"] = {"http": effective_proxy, "https": effective_proxy}
                 else:
@@ -342,7 +352,10 @@ class FingerprintHttpClient:
                 "follow_redirects": True,
                 "trust_env": False,
             }
-            effective_proxy = proxy_url or self.settings.fallback_proxy_url
+            effective_proxy = self._resolve_effective_proxy(
+                proxy_url,
+                allow_fallback_proxy=allow_fallback_proxy,
+            )
             if effective_proxy:
                 client_kwargs["proxy"] = effective_proxy
             with httpx.Client(**client_kwargs) as client:
@@ -352,6 +365,14 @@ class FingerprintHttpClient:
                 "上游请求失败",
                 details={"transport": self.transport_name, "url": url, "reason": str(exc)},
             ) from exc
+
+    def _resolve_effective_proxy(self, proxy_url: str | None, *, allow_fallback_proxy: bool) -> str:
+        explicit_proxy = (proxy_url or "").strip()
+        if explicit_proxy:
+            return explicit_proxy
+        if self.settings.fallback_proxy_ticket_pool_only and not allow_fallback_proxy:
+            return ""
+        return self.settings.fallback_proxy_url
 
     # ------------------------------------------------------------------
     # Response helpers

@@ -1304,6 +1304,7 @@ class PaymentService:
                     invitation_code=invitation,
                     ticket=ticket,
                     randstr=randstr,
+                    allow_fallback_proxy=True,
                 )
             except UpstreamRequestError as exc:
                 self.runtime_logs.log_event(
@@ -1315,6 +1316,7 @@ class PaymentService:
                         "idx": idx,
                         "mode": "serial",
                         "error": exc.message,
+                        "error_details": exc.details,
                         **self._captcha_ticket_log_details(ticket, randstr),
                     },
                     level=logging.WARNING,
@@ -1435,7 +1437,12 @@ class PaymentService:
                         stage="ticket_pool_drain",
                         status="error",
                         message=f"pool 并行 lane {futures[future]} 执行异常: {exc}",
-                        details={"idx": futures[future], "mode": "parallel", "error": str(exc)},
+                        details={
+                            "idx": futures[future],
+                            "mode": "parallel",
+                            "error": str(exc),
+                            "error_type": type(exc).__name__,
+                        },
                         level=logging.WARNING,
                     )
                     continue
@@ -1511,6 +1518,7 @@ class PaymentService:
                 invitation_code=invitation,
                 ticket=ticket,
                 randstr=randstr,
+                allow_fallback_proxy=True,
             )
         except UpstreamRequestError as exc:
             self.runtime_logs.log_event(
@@ -1524,6 +1532,7 @@ class PaymentService:
                     "mode": "parallel",
                     "dispatch_delay_ms": round(delay_ms, 3),
                     "error": exc.message,
+                    "error_details": exc.details,
                     **self._captcha_ticket_log_details(ticket, randstr),
                 },
                 level=logging.WARNING,
@@ -2577,7 +2586,11 @@ class PaymentService:
                 stage="ticket_pool",
                 status="fallback",
                 message="ticket 池已耗尽未拿到 bizId，切换竞速模式继续抢购",
-                details={"pool_size": ticket_pool_size},
+                details={
+                    "pool_size": ticket_pool_size,
+                    "fallback_proxy_ticket_pool_only": self.settings.fallback_proxy_ticket_pool_only,
+                    "fallback_retry_uses_fallback_proxy": not self.settings.fallback_proxy_ticket_pool_only,
+                },
                 level=logging.WARNING,
             )
             self._push_runtime_message(account_id, "ticket 池已耗尽，切换竞速模式继续抢购…")
