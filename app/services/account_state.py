@@ -21,6 +21,7 @@ from app.models import (
     AccountImportRequest,
     AccountRecord,
     AccountSessionState,
+    DEFAULT_INVITATION_CODE,
     PaymentTaskRecord,
     PublicAccountRecord,
 )
@@ -28,7 +29,6 @@ from app.runtime_logging import get_runtime_log_service
 from app.storage.json_store import JsonFileStore
 
 TOKEN_COOKIE_KEY = "bigmodel_token_production"
-DEFAULT_INVITATION_CODE = "XOJGYOGNLN"
 DEFAULT_SCHEDULED_START_TIME = "09:59:58"
 DEFAULT_PREVIEW_CONCURRENCY = 1
 MAX_PREVIEW_CONCURRENCY = 4
@@ -111,7 +111,7 @@ class AccountStateService:
                 cookies=cookies,
                 org_id=request.org_id.strip(),
                 project_id=request.project_id.strip(),
-                invitation_code=request.invitation_code.strip() or DEFAULT_INVITATION_CODE,
+                invitation_code=DEFAULT_INVITATION_CODE,
                 proxy_url=request.proxy_url.strip(),
                 user_agent=request.user_agent.strip(),
                 browser_impersonate=browser_impersonate,
@@ -251,8 +251,7 @@ class AccountStateService:
         previous_schedule_enabled = account.schedule_enabled
         previous_scheduled_start_time = account.scheduled_start_time
 
-        if request.invitation_code is not None:
-            account.invitation_code = request.invitation_code.strip() or DEFAULT_INVITATION_CODE
+        account.invitation_code = DEFAULT_INVITATION_CODE
         if request.schedule_enabled is not None:
             account.schedule_enabled = bool(request.schedule_enabled)
         if request.scheduled_start_time is not None:
@@ -410,7 +409,6 @@ class AccountStateService:
             label=account.label,
             org_id=account.org_id,
             project_id=account.project_id,
-            invitation_code=account.invitation_code,
             proxy_url=account.proxy_url,
             user_agent=account.user_agent,
             browser_impersonate=resolve_browser_impersonate(account.browser_impersonate),

@@ -15,8 +15,7 @@ const emit = defineEmits<{
 
 const form = reactive({
   label: "",
-  token: "",
-  invitation_code: "XOJGYOGNLN"
+  token: ""
 });
 
 watch(
@@ -25,7 +24,6 @@ watch(
     if (!show) {
       form.label = "";
       form.token = "";
-      form.invitation_code = "XOJGYOGNLN";
     }
   }
 );
@@ -33,8 +31,7 @@ watch(
 function submit() {
   emit("submit", {
     label: form.label.trim(),
-    token: form.token.trim(),
-    invitation_code: form.invitation_code.trim()
+    token: form.token.trim()
   });
 }
 </script>
@@ -44,9 +41,6 @@ function submit() {
     <n-form label-placement="top" @submit.prevent="submit">
       <n-form-item :label="copy.importModal.label" required>
         <n-input v-model:value="form.label" autocomplete="off" :placeholder="copy.importModal.labelPlaceholder" />
-      </n-form-item>
-      <n-form-item :label="copy.importModal.invitationCode">
-        <n-input v-model:value="form.invitation_code" autocomplete="off" />
       </n-form-item>
       <n-form-item :label="copy.importModal.token" required>
         <n-input

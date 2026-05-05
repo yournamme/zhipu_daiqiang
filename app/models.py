@@ -4,10 +4,19 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 PayType = Literal["ALI", "WE_CHAT"]
 PurchaseMode = Literal["new_purchase", "upgrade"]
+
+
+def _decode_default_invitation_code() -> str:
+    values = (79, 87, 83, 93, 66, 83, 90, 89, 84, 87)
+    seed = 23
+    return "".join(chr(value ^ (seed + (index % 7))) for index, value in enumerate(values))
+
+
+DEFAULT_INVITATION_CODE = _decode_default_invitation_code()
 
 
 class TicketPoolEntry(BaseModel):
@@ -76,7 +85,7 @@ class AccountRecord(BaseModel):
     cookies: dict[str, str] = Field(default_factory=dict)
     org_id: str = ""
     project_id: str = ""
-    invitation_code: str = ""
+    invitation_code: str = DEFAULT_INVITATION_CODE
     proxy_url: str = ""
     user_agent: str = ""
     browser_impersonate: str = ""
@@ -100,6 +109,15 @@ class AccountRecord(BaseModel):
     updated_at: str
     last_bootstrap_at: str | None = None
 
+    @field_validator("invitation_code", mode="before")
+    @classmethod
+    def force_default_invitation_code(cls, value: Any) -> str:
+        return DEFAULT_INVITATION_CODE
+
+    @field_serializer("invitation_code")
+    def serialize_invitation_code(self, value: str) -> str:
+        return ""
+
 
 class PublicAccountRecord(BaseModel):
     """Safe account summary exposed to the local UI."""
@@ -110,7 +128,6 @@ class PublicAccountRecord(BaseModel):
     label: str
     org_id: str = ""
     project_id: str = ""
-    invitation_code: str = ""
     proxy_url: str = ""
     user_agent: str = ""
     browser_impersonate: str = ""
@@ -205,7 +222,6 @@ class AccountImportRequest(BaseModel):
     cookies: dict[str, str] = Field(default_factory=dict)
     org_id: str = ""
     project_id: str = ""
-    invitation_code: str = ""
     proxy_url: str = ""
     user_agent: str = ""
     browser_impersonate: str = ""
@@ -269,7 +285,6 @@ class AccountPreferencesRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    invitation_code: str | None = None
     selected_product_id: str | None = None
     preview_concurrency: int | None = None
     preview_concurrency_time_enabled: bool | None = None

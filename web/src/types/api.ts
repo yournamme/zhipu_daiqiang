@@ -70,7 +70,6 @@ export interface PublicAccountRecord {
   label: string;
   org_id?: string;
   project_id?: string;
-  invitation_code?: string;
   proxy_url?: string;
   user_agent?: string;
   browser_impersonate?: string;
@@ -147,11 +146,9 @@ export interface AccountDetailResponse {
 export interface AccountImportPayload {
   label: string;
   token: string;
-  invitation_code?: string;
 }
 
 export interface AccountPreferencesPayload {
-  invitation_code?: string | null;
   selected_product_id?: string | null;
   preview_concurrency?: number | null;
   preview_concurrency_time_enabled?: boolean | null;

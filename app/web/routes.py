@@ -32,24 +32,23 @@ SPA_INDEX = Path(__file__).resolve().parents[2] / "web" / "dist" / "index.html"
 
 
 @router.get("/", response_class=HTMLResponse)
-def index(request: Request, ic: str = Query(default="")):
+def index(request: Request):
     if SPA_INDEX.exists():
         return FileResponse(SPA_INDEX)
-    return render_legacy_index(request, ic)
+    return render_legacy_index(request)
 
 
 @router.get("/legacy", response_class=HTMLResponse)
-def legacy_index(request: Request, ic: str = Query(default="")):
-    return render_legacy_index(request, ic)
+def legacy_index(request: Request):
+    return render_legacy_index(request)
 
 
-def render_legacy_index(request: Request, ic: str = ""):
+def render_legacy_index(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
             "request": request,
-            "default_invitation_code": ic,
             "transport_name": payment_service.health_payload()["transport"],
         },
     )

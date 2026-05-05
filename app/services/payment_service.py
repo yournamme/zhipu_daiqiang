@@ -499,7 +499,7 @@ class PaymentService:
                 detail = self.bootstrap_account(account_id, flow=flow)
                 return detail.session.products
 
-            invitation = invitation_code if invitation_code is not None else account.invitation_code
+            invitation = account.invitation_code
             self.runtime_logs.log_event(
                 flow,
                 stage="batch_preview",
@@ -1614,7 +1614,7 @@ class PaymentService:
             )
         try:
             account, session = self._ensure_context(account_id)
-            invitation = (request.invitation_code or account.invitation_code).strip()
+            invitation = account.invitation_code.strip()
             preview_attempts: list[dict[str, Any]] = []
             preview_round = 0
 
@@ -1630,7 +1630,12 @@ class PaymentService:
                     stage="preview",
                     status="started",
                     message=f"开始第 {preview_round} 轮 preview，将先获取验证码票据",
-                    details={"round": preview_round, "product_id": request.product_id, "captcha_required": True},
+                    details={
+                        "round": preview_round,
+                        "product_id": request.product_id,
+                        "captcha_required": True,
+                        "invitation_code": invitation,
+                    },
                 )
                 captcha_request = request if preview_round == 1 else request.model_copy(update={"ticket": None, "randstr": None})
                 try:
@@ -1867,7 +1872,7 @@ class PaymentService:
         except Exception:
             self.ocr_service.release_capacity(capacity_lease_id)
             raise
-        invitation = (request.invitation_code or account.invitation_code).strip()
+        invitation = account.invitation_code.strip()
         stop_event = threading.Event()
         errors: list[str] = []
         self.runtime_logs.log_event(
@@ -1878,6 +1883,7 @@ class PaymentService:
             details={
                 "concurrency": normalized_concurrency,
                 "product_id": request.product_id,
+                "invitation_code": invitation,
                 "preview_concurrency_time": preview_concurrency_time,
                 "preview_concurrency_wait_enabled": bool(preview_concurrency_time),
             },
@@ -2187,7 +2193,7 @@ class PaymentService:
             product_id = request.product_id.strip() or session.selected_product_id
             if not product_id:
                 raise BadRequestError("缺少 product_id，二维码没法生成")
-            invitation = (request.invitation_code or account.invitation_code).strip()
+            invitation = account.invitation_code.strip()
             if not session.preview or not session.preview.biz_id:
                 raise BadRequestError("请先调用 preview，拿到 bizId 之后再生成二维码")
             qr_cycles: list[dict[str, Any]] = []

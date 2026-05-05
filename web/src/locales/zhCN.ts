@@ -65,7 +65,6 @@ export const zhCN = {
     title: "导入账号",
     label: "账号备注",
     labelPlaceholder: "例如 year-max-upgrade",
-    invitationCode: "邀请码",
     token: "bigmodel_token_production",
     tokenPlaceholder: "粘贴 token 值",
     cancel: "取消",
