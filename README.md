@@ -115,11 +115,14 @@ go build -o dynamic-proxy.exe
 2. 在 `.env` 中设置统一出口代理：
 
 ```env
+NETWORK_EGRESS_MODE=dynamic_proxy
 FALLBACK_PROXY_URL=http://127.0.0.1:17286
 FALLBACK_PROXY_TICKET_POOL_ONLY=0
 ```
 
-只有配置了 `FALLBACK_PROXY_URL`，GLM Desk 才会走代理池模式。`start.bat` 也只会在 `FALLBACK_PROXY_URL` 指向本地 `dynamic-proxy` 端口（例如 `127.0.0.1:17286`）时启动 `dynamic-proxy`；如果该值为空，则直接跳过代理池，`KDL_*` 和 `PROXY_POOL_*` 参数不会参与主链路。
+`NETWORK_EGRESS_MODE` 是启动默认出口模式，支持 `local`、`dynamic_proxy`、`zenproxy`。Web 端右上角可以运行时切换出口模式，切换后不需要重启服务；`.env` 只负责预先放好各模式需要的地址和密钥。
+
+只有配置了 `FALLBACK_PROXY_URL`，GLM Desk 才能切到动态代理模式。`start.bat` 也只会在 `FALLBACK_PROXY_URL` 指向本地 `dynamic-proxy` 端口（例如 `127.0.0.1:17286`）时启动 `dynamic-proxy`；如果该值为空，则动态代理模式不可用，`KDL_*` 和 `PROXY_POOL_*` 参数不会参与主链路。
 
 如果只希望 ticket 池消耗阶段的 `/preview` 使用代理池，后续生成二维码、查询支付状态、验证码 challenge/verify 等流程走本地网络，可以开启：
 
@@ -127,7 +130,31 @@ FALLBACK_PROXY_TICKET_POOL_ONLY=0
 FALLBACK_PROXY_TICKET_POOL_ONLY=1
 ```
 
-该开关只限制 `.env` 中的 `FALLBACK_PROXY_URL` 兜底代理；如果某个账号单独配置了 `proxy_url`，账号级代理仍然会优先生效。
+该开关只限制动态代理模式下 `.env` 中的 `FALLBACK_PROXY_URL` 兜底代理；只有 Web 端当前处于 `动态代理` 模式时，账号级 `proxy_url` 才会优先生效。
+
+Web 端切到 `本地` 模式时，会强制走本机出口，不使用 `.env` 中的 `FALLBACK_PROXY_URL`、ZenProxy relay，也不会使用账号级 `proxy_url`。这个模式适合排查本地网络和上游接口状态。
+
+### ZenProxy relay 模式
+
+ZenProxy 的 `/api/relay` 是 HTTP 请求转发接口，不是传统 `http://ip:port` 代理，所以不要把它填到账号的 `proxy_url`。在 `.env` 里配置：
+
+```env
+NETWORK_EGRESS_MODE=zenproxy
+ZENPROXY_RELAY_URL=https://zenproxy.top/api/relay
+ZENPROXY_API_KEY=your_api_key
+ZENPROXY_COUNTRY=
+ZENPROXY_RESIDENTIAL=0
+ZENPROXY_CHATGPT=0
+ZENPROXY_GOOGLE=0
+ZENPROXY_RISK_MAX=
+ZENPROXY_TYPE=
+ZENPROXY_PROXY_ID=
+FALLBACK_PROXY_TICKET_POOL_ONLY=0
+```
+
+配置后可以在 Web 端右上角切换到 `ZenProxy`。系统会把原本请求 BigModel 的 URL、method、headers、cookies 和 body 转交给 ZenProxy relay；`/biz/pay/check?bizId=...` 这类 GET 参数会先合并进目标 URL，再交给 relay，避免参数丢失。
+
+如果 `FALLBACK_PROXY_TICKET_POOL_ONLY=1`，该限制同样作用于 ZenProxy：只有 ticket 池 drain 阶段的 `/preview` 会走 relay，后续普通重试、生成二维码、支付查询等流程走本地。
 
 如果使用快代理 DPS，可以让 `dynamic-proxy` 启动时自动调用快代理白名单接口，再拉取代理池：
 
@@ -173,7 +200,7 @@ GLM Desk 请求 -> FALLBACK_PROXY_URL -> dynamic-proxy -> 内存代理池 -> 上
 
 注意：`.env` 只决定 GLM Desk 是否把请求发给本地 `dynamic-proxy`，不直接读取 `good_proxies.txt`。`good_proxies.txt` 必须写进 `dynamic-proxy/config.yaml` 的 `proxy_list_urls`，才会被 `dynamic-proxy` 加载、健康检测并放入内存代理池。
 
-如果某个账号单独配置了 `proxy_url`，则该账号优先使用自己的 `proxy_url`，不会使用 `FALLBACK_PROXY_URL`。
+如果当前处于 `动态代理` 模式，并且某个账号单独配置了 `proxy_url`，则该账号优先使用自己的 `proxy_url`，不会使用 `FALLBACK_PROXY_URL`。如果 Web 端切到 `本地` 或 `ZenProxy`，账号级 `proxy_url` 不参与请求。
 
 如果 `FALLBACK_PROXY_TICKET_POOL_ONLY=1`，`FALLBACK_PROXY_URL` 只会用于 ticket 池 drain 阶段提交 `/biz/pay/preview`。这个模式适合代理池 IP 时效性较短的场景：并发抢 `bizId` 时借助代理池分摊出口，拿到 `bizId` 后的创建支付二维码等后续请求回到本地出口，避免代理过期拖垮后半段链路。
 

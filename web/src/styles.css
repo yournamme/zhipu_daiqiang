@@ -66,7 +66,7 @@ textarea:focus-visible,
   margin: 0 auto;
   padding: 10px 0 12px;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 10px;
   overflow: hidden;
 }
@@ -115,6 +115,26 @@ textarea:focus-visible,
   flex-wrap: wrap;
 }
 
+.network-mode-switch {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 3px 5px 3px 10px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.74);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.network-mode-switch span {
+  color: var(--desk-muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .preflight-tooltip {
   display: grid;
   gap: 4px;
@@ -148,6 +168,19 @@ textarea:focus-visible,
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  align-self: start;
+}
+
+.banner-slot {
+  min-height: 0;
+}
+
+.dashboard-workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
 }
 
 .stat-card {
@@ -607,6 +640,10 @@ textarea:focus-visible,
   .stats-grid,
   .context-grid {
     grid-template-columns: 1fr;
+  }
+
+  .dashboard-workspace {
+    overflow: visible;
   }
 }
 

@@ -3,6 +3,7 @@ import {
   create,
   NAlert,
   NButton,
+  NButtonGroup,
   NCard,
   NConfigProvider,
   NDrawer,
@@ -18,7 +19,8 @@ import {
   NSpin,
   NSwitch,
   NTable,
-  NTag
+  NTag,
+  NTooltip
 } from "naive-ui";
 import App from "./App.vue";
 import "./styles.css";
@@ -27,6 +29,7 @@ const naive = create({
   components: [
     NAlert,
     NButton,
+    NButtonGroup,
     NCard,
     NConfigProvider,
     NDrawer,
@@ -42,7 +45,8 @@ const naive = create({
     NSpin,
     NSwitch,
     NTable,
-    NTag
+    NTag,
+    NTooltip
   ]
 });
 

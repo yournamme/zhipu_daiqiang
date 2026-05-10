@@ -43,10 +43,13 @@ proxy_checker.py — SOCKS5 代理连通性测试工具
 
   # 6. 实时查看每个通过的代理 + 失败原因分布
   python proxy_checker.py --source proxies.txt --verbose --show-errors
- 
+
   python proxy_checker.py --from-config config.yaml --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
 
    python proxy_checker.py --source proxies.txt  --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
+
+python proxy_checker.py --from-config config.yaml --target www.bigmodel.cn:443 --max-latency 3000 --timeout 8 --concurrency 200 --no-tls --output good_proxies.txt --show-errors
+python proxy_checker.py --source proxies.txt --target www.bigmodel.cn:443 --max-latency 3000 --timeout 8 --concurrency 200 --no-tls --output goodtest_proxies.txt --show-errors
 参数说明
 ────────
   --source          代理列表来源，支持：

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 
 PayType = Literal["ALI", "WE_CHAT"]
 PurchaseMode = Literal["new_purchase", "upgrade"]
+NetworkEgressMode = Literal["local", "dynamic_proxy", "zenproxy"]
 
 
 def _decode_default_invitation_code() -> str:
@@ -95,6 +96,9 @@ class AccountRecord(BaseModel):
     ticket_pool_size: int = 0  # 0 = disabled; N > 0 = pool mode: collect N tickets first
     ticket_pool_start_jitter_ms: int = 0   # random [0, N] ms delay before first drain call; 0 = disabled
     ticket_pool_drain_jitter_ms: int = 0   # random [0, N] ms delay between each drain call; 0 = disabled
+    stock_monitor_enabled: bool = False
+    stock_monitor_last_checked_at: str | None = None
+    stock_monitor_last_message: str = ""
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -137,6 +141,9 @@ class PublicAccountRecord(BaseModel):
     ticket_pool_size: int = 0
     ticket_pool_start_jitter_ms: int = 0
     ticket_pool_drain_jitter_ms: int = 0
+    stock_monitor_enabled: bool = False
+    stock_monitor_last_checked_at: str | None = None
+    stock_monitor_last_message: str = ""
     schedule_enabled: bool = False
     scheduled_start_time: str = ""
     last_scheduled_run_at: str | None = None
@@ -326,6 +333,14 @@ class AccountPreferencesRequest(BaseModel):
         if v > 10_000:
             raise ValueError("jitter 延迟不能超过 10000ms")
         return v
+
+
+class NetworkModeRequest(BaseModel):
+    """Runtime network egress mode switch payload."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    mode: NetworkEgressMode
 
 
 class CaptchaPoint(BaseModel):

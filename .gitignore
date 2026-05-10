@@ -13,6 +13,7 @@ __pycache__/
 *.pyd
 
 data/accounts.json
+data/network_mode.json
 data/logs/
 data/sessions/*.json
 data/tdc_cache/

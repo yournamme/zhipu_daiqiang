@@ -32,6 +32,8 @@ class SchedulerService:
         self._flow_accounts: set[str] = set()
         self._pause_requested: set[str] = set()
         self._pending_scheduled_runs: dict[str, str] = {}
+        self._stock_monitor_threads: dict[str, threading.Thread] = {}
+        self._stock_monitor_stops: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
 
     def start(self) -> None:
@@ -41,6 +43,7 @@ class SchedulerService:
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run_loop, name="glm-desk-scheduler", daemon=True)
         self._thread.start()
+        self._start_enabled_stock_monitors()
         threading.Thread(target=self.check_cached_accounts_once, name="glm-desk-account-check", daemon=True).start()
         self.runtime_logs.log_system_event(
             stage="scheduler",
@@ -50,6 +53,10 @@ class SchedulerService:
 
     def stop(self) -> None:
         self._stop_event.set()
+        with self._lock:
+            monitor_stops = list(self._stock_monitor_stops.values())
+        for stop_event in monitor_stops:
+            stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
         self.runtime_logs.log_system_event(
@@ -218,6 +225,8 @@ class SchedulerService:
             account.last_schedule_message = "定时任务运行中"
         elif source == "probe":
             account.last_schedule_message = "测活任务运行中"
+        elif source == "stock_monitor":
+            account.last_schedule_message = "库存有货，自动支付链路运行中"
         else:
             account.last_schedule_message = "手动任务运行中"
         self.state_service.update_account(account)
@@ -236,6 +245,53 @@ class SchedulerService:
             daemon=True,
         ).start()
         return {"started": True, "status": "running"}
+
+    def start_stock_monitor(self, account_id: str) -> dict[str, object]:
+        account = self.state_service.get_account(account_id)
+        session = self.state_service.load_session(account_id)
+        product_id = (session.selected_product_id or "").strip()
+        if not product_id:
+            product_id = "product-5643e6"
+            session.selected_product_id = product_id
+            self.state_service.save_session(session)
+
+        account.stock_monitor_enabled = True
+        account.stock_monitor_last_checked_at = None
+        account.stock_monitor_last_message = "库存监控已启动，等待首次检查"
+        account.last_schedule_status = "stock_monitoring"
+        account.last_schedule_message = "库存监控中"
+        self.state_service.update_account(account)
+        self._ensure_stock_monitor_thread(account_id)
+        self.runtime_logs.log_account_event(
+            account_id=account_id,
+            action="stock_monitor",
+            stage="monitor",
+            status="started",
+            message="库存监控已启动",
+            details={"product_id": product_id, "interval_seconds": 1},
+        )
+        return {"started": True, "status": "stock_monitoring", "product_id": product_id}
+
+    def stop_stock_monitor(self, account_id: str) -> dict[str, object]:
+        account = self.state_service.get_account(account_id)
+        account.stock_monitor_enabled = False
+        account.stock_monitor_last_message = "库存监控已停止"
+        if str(account.last_schedule_status or "").lower() == "stock_monitoring":
+            account.last_schedule_status = "idle"
+            account.last_schedule_message = "库存监控已停止"
+        self.state_service.update_account(account)
+        with self._lock:
+            stop_event = self._stock_monitor_stops.pop(account_id, None)
+        if stop_event:
+            stop_event.set()
+        self.runtime_logs.log_account_event(
+            account_id=account_id,
+            action="stock_monitor",
+            stage="monitor",
+            status="stopped",
+            message="库存监控已停止",
+        )
+        return {"stopped": True, "status": "idle"}
 
     def request_pause(self, account_id: str) -> dict[str, object]:
         with self._lock:
@@ -280,6 +336,135 @@ class SchedulerService:
     def is_pause_requested(self, account_id: str) -> bool:
         with self._lock:
             return account_id in self._pause_requested
+
+    def _start_enabled_stock_monitors(self) -> None:
+        for public_account in self.state_service.list_accounts():
+            if public_account.stock_monitor_enabled:
+                self._ensure_stock_monitor_thread(public_account.id)
+
+    def _ensure_stock_monitor_thread(self, account_id: str) -> None:
+        with self._lock:
+            existing = self._stock_monitor_threads.get(account_id)
+            if existing and existing.is_alive():
+                return
+            stop_event = threading.Event()
+            thread = threading.Thread(
+                target=self._run_stock_monitor,
+                args=(account_id, stop_event),
+                name=f"glm-desk-stock-{account_id}",
+                daemon=True,
+            )
+            self._stock_monitor_stops[account_id] = stop_event
+            self._stock_monitor_threads[account_id] = thread
+            thread.start()
+
+    def _run_stock_monitor(self, account_id: str, stop_event: threading.Event) -> None:
+        while not self._stop_event.is_set() and not stop_event.is_set():
+            should_continue = self._check_stock_once(account_id, stop_event)
+            if not should_continue:
+                break
+            stop_event.wait(1)
+        with self._lock:
+            current_stop = self._stock_monitor_stops.get(account_id)
+            if current_stop is stop_event:
+                self._stock_monitor_stops.pop(account_id, None)
+            current_thread = self._stock_monitor_threads.get(account_id)
+            if current_thread is threading.current_thread():
+                self._stock_monitor_threads.pop(account_id, None)
+
+    def _check_stock_once(self, account_id: str, stop_event: threading.Event) -> bool:
+        try:
+            account = self.state_service.get_account(account_id)
+        except Exception:
+            return False
+        if not account.stock_monitor_enabled:
+            return False
+        with self._lock:
+            if account_id in self._running_accounts:
+                return True
+
+        session = self.state_service.load_session(account_id)
+        product_id = (session.selected_product_id or "").strip()
+        if not product_id:
+            account.stock_monitor_last_checked_at = utc_now_iso()
+            account.stock_monitor_last_message = "库存监控等待套餐选择"
+            account.last_schedule_status = "stock_monitoring"
+            account.last_schedule_message = account.stock_monitor_last_message
+            self.state_service.update_account(account)
+            return True
+
+        try:
+            products = self.payment_service.load_products(account_id)
+            product = next((item for item in products if item.product_id == product_id), None)
+            raw = product.raw if product else {}
+            raw_sold_out = bool(raw.get("soldOut") or raw.get("sold_out"))
+            forbidden = bool(raw.get("forbidden") or (product.forbidden if product else False))
+            has_upstream_product = bool(raw.get("productId") or raw.get("product_id"))
+            available = bool(product and has_upstream_product and not raw_sold_out and not forbidden)
+            account = self.state_service.get_account(account_id)
+            account.stock_monitor_last_checked_at = utc_now_iso()
+            if available:
+                account.stock_monitor_enabled = False
+                account.stock_monitor_last_message = "库存有货，已自动启动支付链路"
+                account.last_schedule_status = "stock_available"
+                account.last_schedule_message = account.stock_monitor_last_message
+                self.state_service.update_account(account)
+                stop_event.set()
+                self.runtime_logs.log_account_event(
+                    account_id=account_id,
+                    action="stock_monitor",
+                    stage="stock_check",
+                    status="available",
+                    message="监控到套餐有货，自动启动支付链路",
+                    details={
+                        "product_id": product_id,
+                        "product_name": product.product_name if product else "",
+                        "unit": product.unit if product else "",
+                        "has_upstream_product": has_upstream_product,
+                        "raw_sold_out": raw_sold_out,
+                        "forbidden": forbidden,
+                    },
+                )
+                self.start_account_flow(account_id, source="stock_monitor")
+                return False
+
+            account.stock_monitor_last_message = "库存监控中：目标套餐暂无库存"
+            account.last_schedule_status = "stock_monitoring"
+            account.last_schedule_message = account.stock_monitor_last_message
+            self.state_service.update_account(account)
+            self.runtime_logs.log_account_event(
+                account_id=account_id,
+                action="stock_monitor",
+                stage="stock_check",
+                status="sold_out",
+                message="目标套餐暂无库存，继续监控",
+                details={
+                    "product_id": product_id,
+                    "product_found": bool(product),
+                    "has_upstream_product": has_upstream_product,
+                    "raw_sold_out": raw_sold_out,
+                    "forbidden": forbidden,
+                },
+            )
+            return True
+        except Exception as exc:
+            account = self.state_service.get_account(account_id)
+            account.stock_monitor_last_checked_at = utc_now_iso()
+            account.stock_monitor_last_message = f"库存检查失败：{exc}"
+            account.last_schedule_status = "stock_monitoring"
+            account.last_schedule_message = account.stock_monitor_last_message
+            self.state_service.update_account(account)
+            logger.warning("stock monitor check failed for %s: %s", account_id, exc)
+            self.runtime_logs.log_account_event(
+                account_id=account_id,
+                action="stock_monitor",
+                stage="stock_check",
+                status="failed",
+                message="库存检查失败，继续监控",
+                details={"error": exc.__class__.__name__, "message": str(exc)},
+                level=logging.WARNING,
+            )
+            return True
 
     def _scheduled_run_key(self, current_date: str, scheduled_start_time: str) -> str:
         return f"{current_date}|{(scheduled_start_time or '').strip()}"
@@ -326,7 +511,12 @@ class SchedulerService:
             task = self.payment_service.run_payment_flow(account_id, source=source)
             account = self.state_service.get_account(account_id)
             account.last_schedule_status = "success"
-            account.last_schedule_message = f"账号链路正常：{task.biz_id}" if source == "probe" else f"生成二维码成功：{task.biz_id}"
+            if source == "probe":
+                account.last_schedule_message = f"账号链路正常：{task.biz_id}"
+            elif source == "stock_monitor":
+                account.last_schedule_message = f"库存有货自动生成二维码成功：{task.biz_id}"
+            else:
+                account.last_schedule_message = f"生成二维码成功：{task.biz_id}"
             account.account_status = "valid"
             account.account_status_message = "账号链路正常" if source == "probe" else "最近一次执行成功"
             account.account_checked_at = utc_now_iso()

@@ -28,11 +28,31 @@ export interface ProxyHealthPayload {
   message?: string;
 }
 
+export type NetworkEgressMode = "local" | "dynamic_proxy" | "zenproxy";
+
+export interface NetworkModeOptionPayload {
+  available?: boolean;
+  message?: string;
+  label?: string;
+  url?: string;
+}
+
+export interface NetworkModePayload {
+  mode: NetworkEgressMode;
+  available?: boolean;
+  message?: string;
+  label?: string;
+  ticket_pool_only?: boolean;
+  modes?: Record<NetworkEgressMode, NetworkModeOptionPayload>;
+}
+
 export interface HealthPayload {
   status?: string;
   transport: string;
   problems?: string[];
   proxy?: ProxyHealthPayload;
+  relay?: ProxyHealthPayload;
+  network?: NetworkModePayload;
   [key: string]: unknown;
 }
 
@@ -77,6 +97,9 @@ export interface PublicAccountRecord {
   preview_concurrency_time_enabled?: boolean;
   preview_concurrency_time?: string;
   ticket_pool_size?: number;
+  stock_monitor_enabled?: boolean;
+  stock_monitor_last_checked_at?: string | null;
+  stock_monitor_last_message?: string;
   schedule_enabled?: boolean;
   scheduled_start_time?: string;
   last_scheduled_run_at?: string | null;
