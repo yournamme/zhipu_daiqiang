@@ -46,6 +46,7 @@ from app.services.account_state import (
     utc_now_iso,
 )
 from app.services.captcha_service import CaptchaService, get_captcha_service
+from app.services.network_mode_service import get_network_mode_service
 from app.services.ocr_service import OcrService, get_ocr_service
 from app.services.tdc_service import TencentTdcService, get_tdc_service
 
@@ -121,14 +122,18 @@ class PaymentService:
         ocr_status = self.ocr_service.status_payload()
         tdc_status = self.tdc_service.status_payload()
         proxy_status = self._fallback_proxy_health_payload()
+        relay_status = self._zenproxy_relay_health_payload()
+        network_status = get_network_mode_service().status_payload()
         problems: list[str] = []
         if not bool(ocr_status.get("available")):
             missing = ocr_status.get("missing_dependencies") or []
             problems.append(f"OCR 依赖不可用：{missing}")
         if not bool(tdc_status.get("available")):
             problems.extend(str(item) for item in (tdc_status.get("problems") or []))
-        if proxy_status.get("enabled") and not proxy_status.get("available"):
+        if network_status.get("mode") == "dynamic_proxy" and not network_status.get("available"):
             problems.append(str(proxy_status.get("message") or "代理池不可用"))
+        if network_status.get("mode") == "zenproxy" and not network_status.get("available"):
+            problems.append(str(relay_status.get("message") or "ZenProxy relay 配置不可用"))
         return {
             "status": "ok" if not problems else "degraded",
             "problems": problems,
@@ -136,6 +141,8 @@ class PaymentService:
             "ocr": ocr_status,
             "tdc": tdc_status,
             "proxy": proxy_status,
+            "relay": relay_status,
+            "network": network_status,
         }
 
     def _fallback_proxy_health_payload(self) -> dict[str, Any]:
@@ -174,6 +181,34 @@ class PaymentService:
             "host": host,
             "port": port,
             "message": f"代理池已连接：{proxy_url}",
+        }
+
+    def _zenproxy_relay_health_payload(self) -> dict[str, Any]:
+        relay_url = self.settings.zenproxy_relay_url.strip()
+        api_key = self.settings.zenproxy_api_key.strip()
+        if not relay_url and not api_key:
+            return {"enabled": False, "available": False, "url": "", "message": "未配置 ZenProxy relay"}
+        if not relay_url or not api_key:
+            return {
+                "enabled": True,
+                "available": False,
+                "url": relay_url,
+                "message": "ZENPROXY_RELAY_URL 和 ZENPROXY_API_KEY 必须同时配置",
+            }
+        parsed = urlparse(relay_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return {
+                "enabled": True,
+                "available": False,
+                "url": relay_url,
+                "message": f"ZenProxy relay 地址格式异常：{relay_url}",
+            }
+        return {
+            "enabled": True,
+            "available": True,
+            "url": relay_url,
+            "message": "ZenProxy relay 已配置",
+            "ticket_pool_only": self.settings.fallback_proxy_ticket_pool_only,
         }
 
     def _captcha_ticket_log_details(self, ticket: str, randstr: str) -> dict[str, Any]:

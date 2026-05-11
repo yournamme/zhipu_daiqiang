@@ -6,6 +6,7 @@ import type {
   AccountImportPayload,
   AccountPreferencesPayload,
   HealthPayload,
+  NetworkEgressMode,
 } from "../types/api";
 
 export type BannerTone = "success" | "warning" | "error" | "info";
@@ -33,6 +34,9 @@ export function useDashboard() {
   const banner = ref<StatusBanner | null>(null);
   let pollTimer: number | undefined;
   let titleTimer: number | undefined;
+  let qrBeepTimer: number | undefined;
+  let qrBeepStopTimer: number | undefined;
+  let qrAudio: AudioContext | undefined;
   let qrReminderReady = false;
   let knownQrTaskKeys = new Set<string>();
   const pendingQrReminders = new Map<string, { label: string; bizId: string; href: string }>();
@@ -42,7 +46,7 @@ export function useDashboard() {
   const runningTotal = computed(
     () =>
       details.value.filter(({ account }) =>
-        ["running", "pause_requested"].includes(
+        ["running", "pause_requested", "stock_monitoring"].includes(
           String(account.last_schedule_status || "").toLowerCase(),
         ),
       ).length,
@@ -92,37 +96,138 @@ export function useDashboard() {
     }, 900);
   }
 
-  function playQrBeep(count: number) {
-    const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  function getQrAudioContext() {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+    if (qrAudio) {
+      return qrAudio;
+    }
+    const AudioContextCtor =
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
     if (!AudioContextCtor) {
+      return undefined;
+    }
+    try {
+      qrAudio = new AudioContextCtor();
+      return qrAudio;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function unlockQrAudio() {
+    const audio = getQrAudioContext();
+    if (!audio) {
       return;
     }
     try {
-      const audio = new AudioContextCtor();
+      if (audio.state === "suspended") {
+        void audio.resume();
+      }
+      const oscillator = audio.createOscillator();
+      const gain = audio.createGain();
+      const startAt = audio.currentTime;
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, startAt);
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.03);
+      oscillator.connect(gain);
+      gain.connect(audio.destination);
+      oscillator.start(startAt);
+      oscillator.stop(startAt + 0.035);
+    } catch {
+      // Browser autoplay policies can still reject unlock outside user gestures.
+    }
+  }
+
+  async function showQrNotification(text: string, links: StatusBannerLink[]) {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      return;
+    }
+    try {
+      let permission = Notification.permission;
+      if (permission === "default") {
+        permission = await Notification.requestPermission();
+      }
+      if (permission !== "granted") {
+        return;
+      }
+      const notification = new Notification(copy.app.title, {
+        body: text,
+        requireInteraction: true,
+        tag: "glm-desk-qr-generated",
+      });
+      const firstLink = links[0]?.href;
+      if (firstLink) {
+        notification.onclick = () => {
+          window.focus();
+          window.open(firstLink, "_blank", "noopener,noreferrer");
+          notification.close();
+        };
+      }
+    } catch {
+      // Notification permission can be blocked by browser policy.
+    }
+  }
+
+  function playQrBeepBurst(count: number) {
+    const audio = getQrAudioContext();
+    if (!audio) {
+      return;
+    }
+    try {
+      if (audio.state === "suspended") {
+        void audio.resume();
+      }
       const beepCount = Math.min(Math.max(count, 1), 3);
       for (let i = 0; i < beepCount; i += 1) {
         const oscillator = audio.createOscillator();
         const gain = audio.createGain();
-        const startAt = audio.currentTime + i * 0.22;
+        const startAt = audio.currentTime + 0.02 + i * 0.22;
         oscillator.type = "sine";
         oscillator.frequency.setValueAtTime(880, startAt);
         gain.gain.setValueAtTime(0.0001, startAt);
-        gain.gain.exponentialRampToValueAtTime(0.18, startAt + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.28, startAt + 0.015);
         gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.16);
         oscillator.connect(gain);
         gain.connect(audio.destination);
         oscillator.start(startAt);
         oscillator.stop(startAt + 0.18);
       }
-      window.setTimeout(() => void audio.close().catch(() => undefined), 1200);
     } catch {
       // Browser autoplay policies can block audio before user interaction.
     }
   }
 
-  function triggerQrAttention(count: number) {
+  function stopQrBeep() {
+    if (qrBeepTimer) {
+      window.clearInterval(qrBeepTimer);
+      qrBeepTimer = undefined;
+    }
+    if (qrBeepStopTimer) {
+      window.clearTimeout(qrBeepStopTimer);
+      qrBeepStopTimer = undefined;
+    }
+  }
+
+  function playQrBeep(count: number) {
+    const durationMs = 5000;
+    const intervalMs = 550;
+    stopQrBeep();
+    playQrBeepBurst(count);
+    qrBeepTimer = window.setInterval(() => {
+      playQrBeepBurst(count);
+    }, intervalMs);
+    qrBeepStopTimer = window.setTimeout(stopQrBeep, durationMs);
+  }
+
+  function triggerQrAttention(count: number, text: string, links: StatusBannerLink[]) {
     startTitleReminder(count);
-    playQrBeep(count);
+    void playQrBeep(count);
+    void showQrNotification(text, links);
   }
 
   function qrTaskKey(detail: AccountDetailResponse) {
@@ -144,7 +249,7 @@ export function useDashboard() {
   function applyQrGeneratedReminder(nextDetails: AccountDetailResponse[]) {
     const currentKeys = new Set<string>();
     const newQrDetails: AccountDetailResponse[] = [];
-    const shouldNotify = qrReminderReady && nextDetails.length > 1;
+    const shouldNotify = qrReminderReady;
 
     for (const detail of nextDetails) {
       const key = qrTaskKey(detail);
@@ -198,7 +303,7 @@ export function useDashboard() {
       links.length === 1 ? { text: copy.feedback.openQr, href: links[0].href } : undefined,
       links.length > 1 ? links : undefined,
     );
-    triggerQrAttention(newQrDetails.length);
+    triggerQrAttention(newQrDetails.length, text, links);
     return true;
   }
 
@@ -252,6 +357,8 @@ export function useDashboard() {
 
   if (typeof window !== "undefined") {
     window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("pointerdown", unlockQrAudio, { passive: true });
+    window.addEventListener("keydown", unlockQrAudio);
   }
 
   async function runAction(
@@ -260,6 +367,7 @@ export function useDashboard() {
     action: () => Promise<unknown>,
   ) {
     actionKey.value = key;
+    unlockQrAudio();
     try {
       await action();
       setBanner(successText, "success");
@@ -313,6 +421,18 @@ export function useDashboard() {
     );
   }
 
+  async function startStockMonitor(accountId: string) {
+    await runAction(`stock:${accountId}`, copy.feedback.stockMonitorStarted, () =>
+      api.startStockMonitor(accountId),
+    );
+  }
+
+  async function stopStockMonitor(accountId: string) {
+    await runAction(`stock:${accountId}`, copy.feedback.stockMonitorStopped, () =>
+      api.stopStockMonitor(accountId),
+    );
+  }
+
   async function pauseAccount(accountId: string) {
     await runAction(`pause:${accountId}`, copy.feedback.pauseRequested, () =>
       api.pauseAccount(accountId),
@@ -327,10 +447,20 @@ export function useDashboard() {
     );
   }
 
+  async function updateNetworkMode(mode: NetworkEgressMode) {
+    await runAction("network-mode", copy.feedback.networkModeSaved, () =>
+      api.updateNetworkMode(mode),
+    );
+  }
+
   onBeforeUnmount(() => {
     stopPolling();
     stopTitleReminder();
+    stopQrBeep();
     window.removeEventListener("focus", handleWindowFocus);
+    window.removeEventListener("pointerdown", unlockQrAudio);
+    window.removeEventListener("keydown", unlockQrAudio);
+    void qrAudio?.close().catch(() => undefined);
   });
 
   return {
@@ -351,7 +481,10 @@ export function useDashboard() {
     runningTotal,
     runAccount,
     startPolling,
+    startStockMonitor,
+    stopStockMonitor,
     syncAccount,
+    updateNetworkMode,
     updatePreferences,
   };
 }

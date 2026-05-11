@@ -30,6 +30,8 @@ const emit = defineEmits<{
     delete: [accountId: string];
     run: [accountId: string];
     probe: [accountId: string];
+    startStockMonitor: [accountId: string];
+    stopStockMonitor: [accountId: string];
     pause: [accountId: string];
     updateTicketPoolSize: [accountId: string, value: number];
     clearTicketPool: [accountId: string];
@@ -62,6 +64,10 @@ function isScheduleSuccess(detail: AccountDetailResponse) {
         String(detail.account.last_schedule_status || "").toLowerCase() ===
         "success"
     );
+}
+
+function isStockMonitoring(detail: AccountDetailResponse) {
+    return Boolean(detail.account.stock_monitor_enabled);
 }
 
 function scheduleStateText(detail: AccountDetailResponse) {
@@ -350,6 +356,13 @@ function onTicketPoolUpdate(accountId: string, enabled: boolean, size: number) {
                         >
                             {{ detail.account.account_status_message }}
                         </small>
+                        <small
+                            v-if="detail.account.stock_monitor_last_message"
+                            class="schedule-state-line"
+                        >
+                            库存:
+                            {{ detail.account.stock_monitor_last_message }}
+                        </small>
                         <small class="schedule-state-line"
                             >{{ copy.table.scheduleState }}:
                             {{ scheduleStateText(detail) }}</small
@@ -407,6 +420,28 @@ function onTicketPoolUpdate(accountId: string, enabled: boolean, size: number) {
                             @click="emit('probe', detail.account.id)"
                         >
                             {{ copy.table.probe }}
+                        </n-button>
+                        <n-button
+                            secondary
+                            :type="isStockMonitoring(detail) ? 'warning' : 'default'"
+                            :loading="
+                                actionLoading(
+                                    'stock',
+                                    detail.account.id,
+                                    actionKey,
+                                )
+                            "
+                            @click="
+                                isStockMonitoring(detail)
+                                    ? emit('stopStockMonitor', detail.account.id)
+                                    : emit('startStockMonitor', detail.account.id)
+                            "
+                        >
+                            {{
+                                isStockMonitoring(detail)
+                                    ? copy.table.stopStockMonitor
+                                    : copy.table.stockMonitor
+                            }}
                         </n-button>
                         <n-button
                             secondary

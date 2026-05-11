@@ -20,10 +20,12 @@ from app.models import (
     CaptchaVerifyPayloadRequest,
     CreateQrRequest,
     ManualCaptchaRequest,
+    NetworkModeRequest,
     PreviewPaymentRequest,
     PreviewSeedRequest,
 )
 from app.services.payment_service import get_payment_service
+from app.services.network_mode_service import get_network_mode_service
 
 router = APIRouter()
 payment_service = get_payment_service()
@@ -57,6 +59,16 @@ def render_legacy_index(request: Request):
 @router.get("/healthz")
 def healthz():
     return success(payment_service.health_payload())
+
+
+@router.get("/api/network-mode")
+def get_network_mode():
+    return success(get_network_mode_service().status_payload())
+
+
+@router.patch("/api/network-mode")
+def update_network_mode(payload: NetworkModeRequest):
+    return success(get_network_mode_service().set_mode(payload.mode))
 
 
 @router.get("/api/logs/today")
@@ -174,6 +186,20 @@ def probe_account_flow(account_id: str):
     from app.services.scheduler_service import get_scheduler_service
 
     return success(get_scheduler_service().start_account_flow(account_id, source="probe"))
+
+
+@router.post("/api/accounts/{account_id}/stock-monitor/start")
+def start_stock_monitor(account_id: str):
+    from app.services.scheduler_service import get_scheduler_service
+
+    return success(get_scheduler_service().start_stock_monitor(account_id))
+
+
+@router.post("/api/accounts/{account_id}/stock-monitor/stop")
+def stop_stock_monitor(account_id: str):
+    from app.services.scheduler_service import get_scheduler_service
+
+    return success(get_scheduler_service().stop_stock_monitor(account_id))
 
 
 @router.get("/api/accounts/{account_id}/tickets")

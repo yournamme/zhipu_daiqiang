@@ -176,7 +176,8 @@ AVAILABLE_BROWSER_PROFILES: dict[str, BrowserProfile] = {
         sec_ch_ua_platform="",
     ),
     # ── Edge 146 ────────────────────────────────────────────────────────────
-    # curl-cffi 0.15 only exposes edge101; route transport through chrome146
+    # curl-cffi 0.15+ supports modern Chrome 146 TLS profile, so Edge 146 can
+    # route transport through the matching Chromium generation.
     # to avoid mismatching a modern Edge UA with a very old TLS fingerprint.
     "edge146": BrowserProfile(
         profile_id="edge146",

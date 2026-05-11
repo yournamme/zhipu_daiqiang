@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { zhCN as copy } from "../locales/zhCN";
-import type { HealthPayload } from "../types/api";
+import type { HealthPayload, NetworkEgressMode, NetworkModeOptionPayload } from "../types/api";
 
 const props = defineProps<{
   health: HealthPayload | null;
@@ -9,13 +9,43 @@ const props = defineProps<{
 
 const healthProblems = computed(() => props.health?.problems || []);
 const proxyHealth = computed(() => props.health?.proxy);
-const proxyEnabled = computed(() => Boolean(proxyHealth.value?.enabled));
+const network = computed(() => props.health?.network);
+const networkMode = computed<NetworkEgressMode>(() => network.value?.mode || "local");
+const proxyEnabled = computed(() => networkMode.value === "dynamic_proxy" && Boolean(proxyHealth.value?.enabled));
 const proxyAvailable = computed(() => Boolean(proxyHealth.value?.available));
+const networkOptions = computed(() => {
+  const modes = (network.value?.modes || {}) as Partial<Record<NetworkEgressMode, NetworkModeOptionPayload>>;
+  return [
+    {
+      label: copy.app.networkModes.local,
+      value: "local",
+      disabled: false,
+    },
+    {
+      label: copy.app.networkModes.dynamicProxy,
+      value: "dynamic_proxy",
+      disabled: !modes.dynamic_proxy?.available,
+    },
+    {
+      label: copy.app.networkModes.zenproxy,
+      value: "zenproxy",
+      disabled: !modes.zenproxy?.available,
+    },
+  ];
+});
+
+function updateNetworkMode(mode: NetworkEgressMode, disabled?: boolean) {
+  if (disabled || mode === networkMode.value) {
+    return;
+  }
+  emit("update-network-mode", mode);
+}
 
 const emit = defineEmits<{
   logs: [];
   refresh: [];
   import: [];
+  "update-network-mode": [mode: NetworkEgressMode];
 }>();
 </script>
 
@@ -28,6 +58,28 @@ const emit = defineEmits<{
       </div>
       <div class="command-actions" :aria-label="copy.app.primaryActionsLabel">
         <n-tag round type="info">{{ health?.transport || copy.app.transportPending }}</n-tag>
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <div class="network-mode-switch">
+              <span>{{ copy.app.networkMode }}</span>
+              <n-button-group size="small">
+                <n-button
+                  v-for="option in networkOptions"
+                  :key="option.value"
+                  :type="networkMode === option.value ? 'primary' : 'default'"
+                  :secondary="networkMode !== option.value"
+                  :disabled="option.disabled"
+                  @click="updateNetworkMode(option.value as NetworkEgressMode, option.disabled)"
+                >
+                  {{ option.label }}
+                </n-button>
+              </n-button-group>
+            </div>
+          </template>
+          <div class="preflight-tooltip">
+            <div>{{ network?.message || copy.app.transportPending }}</div>
+          </div>
+        </n-tooltip>
         <n-tooltip v-if="proxyEnabled" trigger="hover">
           <template #trigger>
             <n-tag round :type="proxyAvailable ? 'success' : 'warning'">

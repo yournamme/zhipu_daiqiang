@@ -4,6 +4,8 @@ import type {
   AccountPreferencesPayload,
   ApiResponse,
   HealthPayload,
+  NetworkEgressMode,
+  NetworkModePayload,
   RuntimeLogsPayload,
   PublicAccountRecord,
   TicketPoolEntry,
@@ -42,6 +44,12 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export const api = {
   health: () => request<HealthPayload>("/healthz"),
   todayLogs: () => request<RuntimeLogsPayload>("/api/logs/today"),
+  getNetworkMode: () => request<NetworkModePayload>("/api/network-mode"),
+  updateNetworkMode: (mode: NetworkEgressMode) =>
+    request<NetworkModePayload>("/api/network-mode", {
+      method: "PATCH",
+      body: JSON.stringify({ mode }),
+    }),
   listAccounts: () => request<PublicAccountRecord[]>("/api/accounts"),
   getAccount: (accountId: string) =>
     request<AccountDetailResponse>(
@@ -77,6 +85,20 @@ export const api = {
     request<unknown>(`/api/accounts/${encodeURIComponent(accountId)}/probe`, {
       method: "POST",
     }),
+  startStockMonitor: (accountId: string) =>
+    request<unknown>(
+      `/api/accounts/${encodeURIComponent(accountId)}/stock-monitor/start`,
+      {
+        method: "POST",
+      },
+    ),
+  stopStockMonitor: (accountId: string) =>
+    request<unknown>(
+      `/api/accounts/${encodeURIComponent(accountId)}/stock-monitor/stop`,
+      {
+        method: "POST",
+      },
+    ),
   pauseAccount: (accountId: string) =>
     request<unknown>(`/api/accounts/${encodeURIComponent(accountId)}/pause`, {
       method: "POST",

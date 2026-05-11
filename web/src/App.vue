@@ -129,41 +129,48 @@ async function openLogs() {
             @logs="openLogs"
             @refresh="dashboard.refreshDashboard()"
             @import="showImport = true"
+            @update-network-mode="dashboard.updateNetworkMode"
         >
-            <StatusBanner
-                :banner="dashboard.banner.value"
-                @close="dashboard.clearBanner"
-            />
-            <DashboardStats
-                :accounts-total="dashboard.accountsTotal.value"
-                :running-total="dashboard.runningTotal.value"
-                :qr-total="dashboard.qrTotal.value"
-            />
-            <AccountTable
-                :details="dashboard.details.value"
-                :loading="dashboard.loading.value"
-                :action-key="dashboard.actionKey.value"
-                @open-context="openContext"
-                @select-product="updateProduct"
-                @update-schedule="updateSchedule"
-                @update-preview-concurrency="updatePreviewConcurrency"
-                @update-preview-concurrency-time-enabled="
-                    updatePreviewConcurrencyTimeEnabled
-                "
-                @update-preview-concurrency-time="updatePreviewConcurrencyTime"
-                @sync="dashboard.syncAccount"
-                @delete="dashboard.deleteAccount"
-                @run="dashboard.runAccount"
-                @probe="dashboard.probeAccount"
-                @pause="dashboard.pauseAccount"
-                @update-ticket-pool-size="
-                    (id, value) =>
-                        dashboard.updatePreferences(id, {
-                            ticket_pool_size: value,
-                        })
-                "
-                @clear-ticket-pool="dashboard.clearTicketPool"
-            />
+            <div class="banner-slot">
+                <StatusBanner
+                    :banner="dashboard.banner.value"
+                    @close="dashboard.clearBanner"
+                />
+            </div>
+            <section class="dashboard-workspace">
+                <DashboardStats
+                    :accounts-total="dashboard.accountsTotal.value"
+                    :running-total="dashboard.runningTotal.value"
+                    :qr-total="dashboard.qrTotal.value"
+                />
+                <AccountTable
+                    :details="dashboard.details.value"
+                    :loading="dashboard.loading.value"
+                    :action-key="dashboard.actionKey.value"
+                    @open-context="openContext"
+                    @select-product="updateProduct"
+                    @update-schedule="updateSchedule"
+                    @update-preview-concurrency="updatePreviewConcurrency"
+                    @update-preview-concurrency-time-enabled="
+                        updatePreviewConcurrencyTimeEnabled
+                    "
+                    @update-preview-concurrency-time="updatePreviewConcurrencyTime"
+                    @sync="dashboard.syncAccount"
+                    @delete="dashboard.deleteAccount"
+                    @run="dashboard.runAccount"
+                    @probe="dashboard.probeAccount"
+                    @start-stock-monitor="dashboard.startStockMonitor"
+                    @stop-stock-monitor="dashboard.stopStockMonitor"
+                    @pause="dashboard.pauseAccount"
+                    @update-ticket-pool-size="
+                        (id, value) =>
+                            dashboard.updatePreferences(id, {
+                                ticket_pool_size: value,
+                            })
+                    "
+                    @clear-ticket-pool="dashboard.clearTicketPool"
+                />
+            </section>
         </AppShell>
 
         <ImportAccountModal
