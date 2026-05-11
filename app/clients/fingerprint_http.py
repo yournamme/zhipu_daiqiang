@@ -214,6 +214,7 @@ class FingerprintHttpClient:
         origin       = pop(caller, "Origin")
         referer      = pop(caller, "Referer")      or self.settings.bigmodel_referer
         accept_lang  = pop(caller, "Accept-Language") or self.settings.default_language
+        set_language = pop(caller, "Set-Language") or self.settings.default_language
 
         # Content-Type: only include when there is a request body.
         # Callers may already provide a specific type (e.g. form-urlencoded).
@@ -252,6 +253,7 @@ class FingerprintHttpClient:
         # ── 6. Remaining custom caller headers ────────────────────────────
         # (Authorization, Bigmodel-Organization, X-Requested-With, etc.)
         merged.update(caller)
+        merged["Set-Language"] = set_language
 
         # ── 7. Sec-Fetch metadata (browser-injected, always present) ──────
         merged["Sec-Fetch-Site"] = sec_fetch_site

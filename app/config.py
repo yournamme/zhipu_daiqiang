@@ -85,7 +85,7 @@ def get_settings() -> Settings:
             os.getenv("REQUEST_TIMEOUT_SECONDS", "20"),
             field_name="REQUEST_TIMEOUT_SECONDS",
         ),
-        default_language=os.getenv("DEFAULT_LANGUAGE", "zh-CN").strip() or "zh-CN",
+        default_language=os.getenv("DEFAULT_LANGUAGE", "zh").strip() or "zh",
         tencent_captcha_domain=os.getenv(
             "TENCENT_CAPTCHA_DOMAIN",
             "https://turing.captcha.qcloud.com",
