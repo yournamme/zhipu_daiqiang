@@ -2,21 +2,15 @@
 #
 # 【重要】健康检测目标应与你的实际请求目标一致。
 # 如果目标是国内站点（如 bigmodel.cn），必须使用国内代理源。
-# 境外免费代理列表（github raw）无法可靠访问国内域名，请替换为国内代理 API。
-#
-# 推荐国内代理服务商（支持按量付费 API 拉取 IP:Port 列表）：
-#   - 快代理  https://www.kuaidaili.com/
-#   - 芝麻代理 https://www.zmhttp.com/
-#   - 阿布云  https://www.abucloud.net/
-#   - 太阳HTTP https://www.taiyanghttps.com/
-# 将 API 返回的 txt 格式地址填入 proxy_list_urls 即可。
+# 境外免费代理列表（github raw）无法可靠访问国内域名，请替换为你自己的国内代理 API。
+# 将代理 API 返回的 txt 格式地址填入 proxy_list_urls 即可。
 
 # 代理列表来源（每行一个 ip:port 或带协议前缀）
 # 支持 HTTP(S) URL，也支持本地文件路径。
 # 如果先用 proxy_checker.py 筛选代理，可以将输出文件填入这里，例如：
 #   - "good_proxies.txt"
 proxy_list_urls:
-  # 推荐：使用本地预筛选结果。该文件由 proxy_checker.py 生成，路径相对 dynamic-proxy 工作目录。
+  # 使用本地预筛选结果。该文件由 proxy_checker.py 生成，路径相对 dynamic-proxy 工作目录。
   # 文件不存在时 dynamic-proxy 会记录 warning，并继续尝试下面的在线代理源。
   - "good_proxies.txt"
   # 示例：付费国内代理 API 地址（替换为你自己的）

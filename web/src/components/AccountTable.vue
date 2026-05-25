@@ -33,7 +33,7 @@ const emit = defineEmits<{
     startStockMonitor: [accountId: string];
     stopStockMonitor: [accountId: string];
     pause: [accountId: string];
-    updateTicketPoolSize: [accountId: string, value: number];
+    updateTicketPool: [accountId: string, size: number, drainIntervalMs: number];
     clearTicketPool: [accountId: string];
 }>();
 
@@ -143,6 +143,16 @@ function ticketPoolSize(detail: AccountDetailResponse) {
     return Math.max(0, Number(detail.account.ticket_pool_size || 0));
 }
 
+function ticketPoolDrainIntervalMs(detail: AccountDetailResponse) {
+    return Math.max(
+        0,
+        Math.min(
+            10000,
+            Number(detail.account.ticket_pool_drain_interval_ms || 0),
+        ),
+    );
+}
+
 function ticketPoolCollected(detail: AccountDetailResponse) {
     const pool = detail.session.ticket_pool || [];
     return pool.filter((e) => !e.used).length;
@@ -152,9 +162,14 @@ function ticketPoolTarget(detail: AccountDetailResponse) {
     return ticketPoolSize(detail);
 }
 
-function onTicketPoolUpdate(accountId: string, enabled: boolean, size: number) {
+function onTicketPoolUpdate(
+    accountId: string,
+    enabled: boolean,
+    size: number,
+    drainIntervalMs: number,
+) {
     // enabled=false → size=0 (pool off), enabled=true → size=N (pool on)
-    emit("updateTicketPoolSize", accountId, enabled ? size : 0);
+    emit("updateTicketPool", accountId, enabled ? size : 0, drainIntervalMs);
 }
 </script>
 
@@ -323,6 +338,9 @@ function onTicketPoolUpdate(accountId: string, enabled: boolean, size: number) {
                                 :account-id="detail.account.id"
                                 :enabled="ticketPoolSize(detail) > 0"
                                 :size="ticketPoolSize(detail)"
+                                :drain-interval-ms="
+                                    ticketPoolDrainIntervalMs(detail)
+                                "
                                 :collected="ticketPoolCollected(detail)"
                                 :target="ticketPoolTarget(detail)"
                                 @update="onTicketPoolUpdate"

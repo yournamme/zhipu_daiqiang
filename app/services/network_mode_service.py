@@ -10,7 +10,7 @@ from app.errors import BadRequestError
 from app.models import NetworkEgressMode
 from app.storage.json_store import JsonFileStore
 
-VALID_NETWORK_MODES: set[str] = {"local", "dynamic_proxy", "zenproxy"}
+VALID_NETWORK_MODES: set[str] = {"local", "dynamic_proxy"}
 
 
 class NetworkModeService:
@@ -27,7 +27,7 @@ class NetworkModeService:
         payload = self.store.read()
         mode = str((payload or {}).get("mode") or self.settings.network_egress_mode).strip()
         if mode not in VALID_NETWORK_MODES:
-            return self.settings.network_egress_mode  # type: ignore[return-value]
+            return "local"
         return mode  # type: ignore[return-value]
 
     def set_mode(self, mode: NetworkEgressMode) -> dict[str, Any]:
@@ -57,16 +57,6 @@ class NetworkModeService:
                 ),
                 "label": "动态代理",
                 "url": self.settings.fallback_proxy_url,
-            },
-            "zenproxy": {
-                "available": bool(self.settings.zenproxy_relay_url and self.settings.zenproxy_api_key),
-                "message": (
-                    f"ZenProxy relay 模式：{self.settings.zenproxy_relay_url}"
-                    if self.settings.zenproxy_relay_url and self.settings.zenproxy_api_key
-                    else "ZenProxy 模式需要同时配置 ZENPROXY_RELAY_URL 和 ZENPROXY_API_KEY"
-                ),
-                "label": "ZenProxy",
-                "url": self.settings.zenproxy_relay_url,
             },
         }
         current = modes.get(active_mode, modes["local"])

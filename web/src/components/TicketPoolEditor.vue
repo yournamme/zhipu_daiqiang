@@ -5,12 +5,13 @@ const props = defineProps<{
     accountId: string;
     enabled: boolean;
     size: number;
+    drainIntervalMs: number;
     collected: number;
     target: number;
 }>();
 
 const emit = defineEmits<{
-    update: [accountId: string, enabled: boolean, size: number];
+    update: [accountId: string, enabled: boolean, size: number, drainIntervalMs: number];
     clearPool: [accountId: string];
 }>();
 
@@ -20,13 +21,19 @@ function toggleEnabled(enabled: boolean) {
     const nextSize = enabled
         ? Math.max(props.size || 0, DEFAULT_POOL_SIZE)
         : 0;
-    emit("update", props.accountId, enabled, nextSize);
+    emit("update", props.accountId, enabled, nextSize, props.drainIntervalMs);
 }
 
 function updateSize(event: Event) {
     const raw = parseInt((event.target as HTMLInputElement).value, 10);
     const size = Math.max(1, Math.min(50, isNaN(raw) ? DEFAULT_POOL_SIZE : raw));
-    emit("update", props.accountId, true, size);
+    emit("update", props.accountId, true, size, props.drainIntervalMs);
+}
+
+function updateDrainInterval(event: Event) {
+    const raw = parseInt((event.target as HTMLInputElement).value, 10);
+    const intervalMs = Math.max(0, Math.min(10000, isNaN(raw) ? 0 : raw));
+    emit("update", props.accountId, true, props.size || DEFAULT_POOL_SIZE, intervalMs);
 }
 </script>
 
@@ -50,6 +57,20 @@ function updateSize(event: Event) {
                 :disabled="collected > 0"
                 @change="updateSize"
             />
+            <label class="pool-interval-control">
+                <span>{{ copy.ticketPool.intervalLabel }}</span>
+                <input
+                    class="pool-interval-input"
+                    type="number"
+                    min="0"
+                    max="10000"
+                    step="50"
+                    :value="drainIntervalMs"
+                    :title="copy.ticketPool.intervalHint"
+                    :aria-label="copy.ticketPool.intervalLabel"
+                    @change="updateDrainInterval"
+                />
+            </label>
             <span
                 v-if="target > 0"
                 :class="collected >= target ? 'pool-ready' : 'pool-filling'"

@@ -446,6 +446,45 @@ textarea:focus-visible,
   gap: 8px;
 }
 
+.ticket-pool-cell {
+  display: grid;
+  grid-template-columns: auto minmax(56px, 72px) minmax(120px, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.pool-size-input,
+.pool-interval-input {
+  min-height: 34px;
+  min-width: 0;
+  border: 1px solid var(--desk-line);
+  border-radius: 12px;
+  padding: 4px 8px;
+  color: var(--desk-ink);
+  background: #fff;
+}
+
+.pool-interval-control {
+  display: grid;
+  grid-template-columns: auto minmax(54px, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: var(--desk-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pool-ready,
+.pool-filling {
+  color: #166534;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.pool-filling {
+  color: #92400e;
+}
+
 .time-input {
   min-height: 36px;
   border: 1px solid var(--desk-line);

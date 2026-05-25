@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 PayType = Literal["ALI", "WE_CHAT"]
 PurchaseMode = Literal["new_purchase", "upgrade"]
-NetworkEgressMode = Literal["local", "dynamic_proxy", "zenproxy"]
+NetworkEgressMode = Literal["local", "dynamic_proxy"]
 
 
 def _decode_default_invitation_code() -> str:
@@ -94,8 +94,7 @@ class AccountRecord(BaseModel):
     preview_concurrency_time_enabled: bool = False
     preview_concurrency_time: str = ""
     ticket_pool_size: int = 0  # 0 = disabled; N > 0 = pool mode: collect N tickets first
-    ticket_pool_start_jitter_ms: int = 0   # random [0, N] ms delay before first drain call; 0 = disabled
-    ticket_pool_drain_jitter_ms: int = 0   # random [0, N] ms delay between each drain call; 0 = disabled
+    ticket_pool_drain_interval_ms: int = 0  # 0 = parallel drain; N > 0 = serial drain interval
     stock_monitor_enabled: bool = False
     stock_monitor_last_checked_at: str | None = None
     stock_monitor_last_message: str = ""
@@ -115,12 +114,9 @@ class AccountRecord(BaseModel):
 
     @field_validator("invitation_code", mode="before")
     @classmethod
-    def force_default_invitation_code(cls, value: Any) -> str:
-        return DEFAULT_INVITATION_CODE
-
-    @field_serializer("invitation_code")
-    def serialize_invitation_code(self, value: str) -> str:
-        return ""
+    def normalize_invitation_code(cls, value: Any) -> str:
+        normalized = str(value or "").strip()
+        return normalized or DEFAULT_INVITATION_CODE
 
 
 class PublicAccountRecord(BaseModel):
@@ -139,8 +135,8 @@ class PublicAccountRecord(BaseModel):
     preview_concurrency_time_enabled: bool = False
     preview_concurrency_time: str = ""
     ticket_pool_size: int = 0
-    ticket_pool_start_jitter_ms: int = 0
-    ticket_pool_drain_jitter_ms: int = 0
+    ticket_pool_drain_interval_ms: int = 0
+    invitation_code: str = DEFAULT_INVITATION_CODE
     stock_monitor_enabled: bool = False
     stock_monitor_last_checked_at: str | None = None
     stock_monitor_last_message: str = ""
@@ -229,6 +225,7 @@ class AccountImportRequest(BaseModel):
     cookies: dict[str, str] = Field(default_factory=dict)
     org_id: str = ""
     project_id: str = ""
+    invitation_code: str | None = None
     proxy_url: str = ""
     user_agent: str = ""
     browser_impersonate: str = ""
@@ -297,8 +294,7 @@ class AccountPreferencesRequest(BaseModel):
     preview_concurrency_time_enabled: bool | None = None
     preview_concurrency_time: str | None = None
     ticket_pool_size: int | None = None
-    ticket_pool_start_jitter_ms: int | None = None
-    ticket_pool_drain_jitter_ms: int | None = None
+    ticket_pool_drain_interval_ms: int | None = None
     schedule_enabled: bool | None = None
     scheduled_start_time: str | None = None
 
@@ -322,16 +318,16 @@ class AccountPreferencesRequest(BaseModel):
     def validate_preview_concurrency_time(cls, value: str | None) -> str | None:
         return _normalize_hms(value, field_name="preview_concurrency_time")
 
-    @field_validator("ticket_pool_start_jitter_ms", "ticket_pool_drain_jitter_ms")
+    @field_validator("ticket_pool_drain_interval_ms")
     @classmethod
-    def validate_ticket_pool_jitter_ms(cls, value: int | None) -> int | None:
+    def validate_ticket_pool_drain_interval_ms(cls, value: int | None) -> int | None:
         if value is None:
             return None
         v = int(value)
         if v < 0:
-            raise ValueError("jitter 延迟不能为负数")
+            raise ValueError("ticket 发射间隔不能为负数")
         if v > 10_000:
-            raise ValueError("jitter 延迟不能超过 10000ms")
+            raise ValueError("ticket 发射间隔不能超过 10000ms")
         return v
 
 

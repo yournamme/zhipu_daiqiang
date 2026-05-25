@@ -26,11 +26,6 @@ const networkOptions = computed(() => {
       value: "dynamic_proxy",
       disabled: !modes.dynamic_proxy?.available,
     },
-    {
-      label: copy.app.networkModes.zenproxy,
-      value: "zenproxy",
-      disabled: !modes.zenproxy?.available,
-    },
   ];
 });
 

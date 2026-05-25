@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import concurrent.futures
 import logging
-import random
 import socket
 import threading
 import time
@@ -122,7 +121,6 @@ class PaymentService:
         ocr_status = self.ocr_service.status_payload()
         tdc_status = self.tdc_service.status_payload()
         proxy_status = self._fallback_proxy_health_payload()
-        relay_status = self._zenproxy_relay_health_payload()
         network_status = get_network_mode_service().status_payload()
         problems: list[str] = []
         if not bool(ocr_status.get("available")):
@@ -132,8 +130,6 @@ class PaymentService:
             problems.extend(str(item) for item in (tdc_status.get("problems") or []))
         if network_status.get("mode") == "dynamic_proxy" and not network_status.get("available"):
             problems.append(str(proxy_status.get("message") or "代理池不可用"))
-        if network_status.get("mode") == "zenproxy" and not network_status.get("available"):
-            problems.append(str(relay_status.get("message") or "ZenProxy relay 配置不可用"))
         return {
             "status": "ok" if not problems else "degraded",
             "problems": problems,
@@ -141,7 +137,6 @@ class PaymentService:
             "ocr": ocr_status,
             "tdc": tdc_status,
             "proxy": proxy_status,
-            "relay": relay_status,
             "network": network_status,
         }
 
@@ -181,34 +176,6 @@ class PaymentService:
             "host": host,
             "port": port,
             "message": f"代理池已连接：{proxy_url}",
-        }
-
-    def _zenproxy_relay_health_payload(self) -> dict[str, Any]:
-        relay_url = self.settings.zenproxy_relay_url.strip()
-        api_key = self.settings.zenproxy_api_key.strip()
-        if not relay_url and not api_key:
-            return {"enabled": False, "available": False, "url": "", "message": "未配置 ZenProxy relay"}
-        if not relay_url or not api_key:
-            return {
-                "enabled": True,
-                "available": False,
-                "url": relay_url,
-                "message": "ZENPROXY_RELAY_URL 和 ZENPROXY_API_KEY 必须同时配置",
-            }
-        parsed = urlparse(relay_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            return {
-                "enabled": True,
-                "available": False,
-                "url": relay_url,
-                "message": f"ZenProxy relay 地址格式异常：{relay_url}",
-            }
-        return {
-            "enabled": True,
-            "available": True,
-            "url": relay_url,
-            "message": "ZenProxy relay 已配置",
-            "ticket_pool_only": self.settings.fallback_proxy_ticket_pool_only,
         }
 
     def _captcha_ticket_log_details(self, ticket: str, randstr: str) -> dict[str, Any]:
@@ -1224,21 +1191,20 @@ class PaymentService:
         return session
 
     @staticmethod
-    def _ticket_pool_jitter_sleep(jitter_ms: int) -> None:
-        """Sleep a random duration in [0, jitter_ms] ms to spread drain requests."""
-        if jitter_ms <= 0:
+    def _ticket_pool_drain_interval_ms(account: AccountRecord) -> int:
+        """Return the per-account ticket drain interval in milliseconds."""
+        return max(0, min(10_000, int(account.ticket_pool_drain_interval_ms or 0)))
+
+    def _sleep_ticket_pool_interval(self, account_id: str, interval_ms: int) -> None:
+        if interval_ms <= 0:
             return
-        delay_s = random.uniform(0, jitter_ms) / 1000.0
-        if delay_s > 0:
-            time.sleep(delay_s)
-
-    def _ticket_pool_start_jitter_ms(self, account: AccountRecord) -> int:
-        """Per-account jitter wins; .env provides the global default."""
-        return account.ticket_pool_start_jitter_ms if account.ticket_pool_start_jitter_ms > 0 else self.settings.ticket_pool_start_jitter_ms
-
-    def _ticket_pool_drain_jitter_ms(self, account: AccountRecord) -> int:
-        """Per-account jitter wins; .env provides the global default."""
-        return account.ticket_pool_drain_jitter_ms if account.ticket_pool_drain_jitter_ms > 0 else self.settings.ticket_pool_drain_jitter_ms
+        deadline = time.monotonic() + interval_ms / 1000.0
+        while True:
+            self._ensure_not_paused(account_id)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.05, remaining))
 
     def _drain_ticket_pool(
         self,
@@ -1250,9 +1216,9 @@ class PaymentService:
         *,
         flow: FlowRun,
     ) -> PreviewResult:
-        """Consume pool tickets according to the configured drain mode."""
-        mode = self.settings.ticket_pool_drain_mode
-        if mode == "parallel":
+        """Consume pool tickets using parallel mode or serial fixed-interval mode."""
+        drain_interval_ms = self._ticket_pool_drain_interval_ms(account)
+        if drain_interval_ms <= 0:
             return self._drain_ticket_pool_parallel(
                 account_id,
                 account,
@@ -1267,6 +1233,7 @@ class PaymentService:
             session,
             request,
             invitation,
+            drain_interval_ms=drain_interval_ms,
             flow=flow,
         )
 
@@ -1278,13 +1245,12 @@ class PaymentService:
         request: PreviewPaymentRequest,
         invitation: str,
         *,
+        drain_interval_ms: int,
         flow: FlowRun,
     ) -> PreviewResult:
         """Consume pool tickets one by one until /preview returns a bizId."""
         pool = list(session.ticket_pool)
         unused = [e for e in pool if not e.used]
-        start_jitter_ms = self._ticket_pool_start_jitter_ms(account)
-        drain_jitter_ms = self._ticket_pool_drain_jitter_ms(account)
 
         if not unused:
             raise UpstreamRequestError(
@@ -1300,13 +1266,13 @@ class PaymentService:
             details={
                 "count": len(unused),
                 "mode": "serial",
-                "start_jitter_ms": start_jitter_ms,
-                "drain_jitter_ms": drain_jitter_ms,
+                "drain_interval_ms": drain_interval_ms,
             },
         )
-        self._push_runtime_message(account_id, f"ticket 池串行消耗中，共 {len(unused)} 个 ticket")
-
-        self._ticket_pool_jitter_sleep(start_jitter_ms)
+        self._push_runtime_message(
+            account_id,
+            f"ticket 池串行消耗中，共 {len(unused)} 个 ticket，间隔 {drain_interval_ms}ms",
+        )
 
         for idx, entry in enumerate(unused, start=1):
             self._ensure_not_paused(account_id)
@@ -1356,7 +1322,8 @@ class PaymentService:
                     },
                     level=logging.WARNING,
                 )
-                self._ticket_pool_jitter_sleep(drain_jitter_ms)
+                if idx < len(unused):
+                    self._sleep_ticket_pool_interval(account_id, drain_interval_ms)
                 continue
 
             raw = result.raw
@@ -1377,7 +1344,8 @@ class PaymentService:
                 self._push_runtime_message(account_id, f"pool 串行第 {idx} 个 ticket 成功，bizId: {biz_id}")
                 return self._preview_from_upstream_payload(raw)
 
-            self._ticket_pool_jitter_sleep(drain_jitter_ms)
+            if idx < len(unused):
+                self._sleep_ticket_pool_interval(account_id, drain_interval_ms)
 
         raise UpstreamRequestError(
             "ticket 池已耗尽，所有 ticket 均未能拿到 bizId",
@@ -1397,8 +1365,6 @@ class PaymentService:
         """Stagger-submit pool tickets in parallel and return the first bizId winner."""
         pool = list(session.ticket_pool)
         unused = [e for e in pool if not e.used]
-        start_jitter_ms = self._ticket_pool_start_jitter_ms(account)
-        drain_jitter_ms = self._ticket_pool_drain_jitter_ms(account)
 
         if not unused:
             raise UpstreamRequestError(
@@ -1414,20 +1380,14 @@ class PaymentService:
             details={
                 "count": len(unused),
                 "mode": "parallel",
-                "start_jitter_ms": start_jitter_ms,
-                "drain_jitter_ms": drain_jitter_ms,
+                "drain_interval_ms": 0,
             },
         )
         self._push_runtime_message(account_id, f"ticket 池并行消耗中，共 {len(unused)} 个 ticket")
 
-        self._ticket_pool_jitter_sleep(start_jitter_ms)
-
-        cumulative_delay_ms = 0.0
         lane_specs: list[tuple[int, Any, float]] = []
         for idx, entry in enumerate(unused, start=1):
-            lane_specs.append((idx, entry, cumulative_delay_ms))
-            if drain_jitter_ms > 0:
-                cumulative_delay_ms += random.uniform(0, drain_jitter_ms)
+            lane_specs.append((idx, entry, 0.0))
 
         for _, entry, _ in lane_specs:
             entry.used = True
@@ -2489,7 +2449,10 @@ class PaymentService:
                     details={
                         "pool_size": ticket_pool_size,
                         "deadline": deadline_time or "disabled",
-                        "drain_mode": self.settings.ticket_pool_drain_mode,
+                        "drain_mode": "parallel"
+                        if current_account.ticket_pool_drain_interval_ms <= 0
+                        else "serial",
+                        "drain_interval_ms": current_account.ticket_pool_drain_interval_ms,
                     },
                 )
                 self._push_runtime_message(account_id, f"ticket 池模式，目标 {ticket_pool_size} 个 ticket")

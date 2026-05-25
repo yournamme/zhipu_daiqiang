@@ -28,7 +28,7 @@ export interface ProxyHealthPayload {
   message?: string;
 }
 
-export type NetworkEgressMode = "local" | "dynamic_proxy" | "zenproxy";
+export type NetworkEgressMode = "local" | "dynamic_proxy";
 
 export interface NetworkModeOptionPayload {
   available?: boolean;
@@ -51,7 +51,6 @@ export interface HealthPayload {
   transport: string;
   problems?: string[];
   proxy?: ProxyHealthPayload;
-  relay?: ProxyHealthPayload;
   network?: NetworkModePayload;
   [key: string]: unknown;
 }
@@ -97,6 +96,8 @@ export interface PublicAccountRecord {
   preview_concurrency_time_enabled?: boolean;
   preview_concurrency_time?: string;
   ticket_pool_size?: number;
+  ticket_pool_drain_interval_ms?: number;
+  invitation_code?: string;
   stock_monitor_enabled?: boolean;
   stock_monitor_last_checked_at?: string | null;
   stock_monitor_last_message?: string;
@@ -169,6 +170,7 @@ export interface AccountDetailResponse {
 export interface AccountImportPayload {
   label: string;
   token: string;
+  invitation_code?: string;
 }
 
 export interface AccountPreferencesPayload {
@@ -179,4 +181,5 @@ export interface AccountPreferencesPayload {
   schedule_enabled?: boolean | null;
   scheduled_start_time?: string | null;
   ticket_pool_size?: number | null;
+  ticket_pool_drain_interval_ms?: number | null;
 }

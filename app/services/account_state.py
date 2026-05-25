@@ -96,6 +96,10 @@ class AccountStateService:
             created_at = str(existing.get("created_at")) if existing else now
             last_bootstrap_at = existing.get("last_bootstrap_at") if existing else None
             existing_impersonate = str(existing.get("browser_impersonate") or "") if existing else ""
+            invitation_code = (request.invitation_code or "").strip()
+            if not invitation_code and existing:
+                invitation_code = str(existing.get("invitation_code") or "").strip()
+            invitation_code = invitation_code or DEFAULT_INVITATION_CODE
             requested_impersonate = (request.browser_impersonate or "").strip()
             if requested_impersonate:
                 browser_impersonate = resolve_browser_impersonate(requested_impersonate)
@@ -111,7 +115,7 @@ class AccountStateService:
                 cookies=cookies,
                 org_id=request.org_id.strip(),
                 project_id=request.project_id.strip(),
-                invitation_code=DEFAULT_INVITATION_CODE,
+                invitation_code=invitation_code,
                 proxy_url=request.proxy_url.strip(),
                 user_agent=request.user_agent.strip(),
                 browser_impersonate=browser_impersonate,
@@ -119,6 +123,15 @@ class AccountStateService:
                 preview_concurrency_time_enabled=bool(existing.get("preview_concurrency_time_enabled")) if existing else False,
                 preview_concurrency_time=str(existing.get("preview_concurrency_time") or "") if existing else "",
                 ticket_pool_size=max(0, int(existing.get("ticket_pool_size") or 0)) if existing else 0,
+                ticket_pool_drain_interval_ms=max(
+                    0,
+                    min(
+                        10_000,
+                        int(existing.get("ticket_pool_drain_interval_ms") or 0),
+                    ),
+                )
+                if existing
+                else 0,
                 stock_monitor_enabled=bool(existing.get("stock_monitor_enabled")) if existing else False,
                 stock_monitor_last_checked_at=existing.get("stock_monitor_last_checked_at") if existing else None,
                 stock_monitor_last_message=str(existing.get("stock_monitor_last_message") or "") if existing else "",
@@ -169,6 +182,7 @@ class AccountStateService:
                 "preview_concurrency": account.preview_concurrency,
                 "preview_concurrency_time_enabled": account.preview_concurrency_time_enabled,
                 "preview_concurrency_time": account.preview_concurrency_time,
+                "invitation_code": account.invitation_code,
             },
         )
         return self.to_public_account(account)
@@ -254,7 +268,6 @@ class AccountStateService:
         previous_schedule_enabled = account.schedule_enabled
         previous_scheduled_start_time = account.scheduled_start_time
 
-        account.invitation_code = DEFAULT_INVITATION_CODE
         if request.schedule_enabled is not None:
             account.schedule_enabled = bool(request.schedule_enabled)
         if request.scheduled_start_time is not None:
@@ -269,10 +282,8 @@ class AccountStateService:
             account.preview_concurrency_time = request.preview_concurrency_time.strip()
         if request.ticket_pool_size is not None:
             account.ticket_pool_size = max(0, min(50, int(request.ticket_pool_size)))
-        if request.ticket_pool_start_jitter_ms is not None:
-            account.ticket_pool_start_jitter_ms = max(0, min(10_000, int(request.ticket_pool_start_jitter_ms)))
-        if request.ticket_pool_drain_jitter_ms is not None:
-            account.ticket_pool_drain_jitter_ms = max(0, min(10_000, int(request.ticket_pool_drain_jitter_ms)))
+        if request.ticket_pool_drain_interval_ms is not None:
+            account.ticket_pool_drain_interval_ms = max(0, min(10_000, int(request.ticket_pool_drain_interval_ms)))
         if self._should_skip_today_after_schedule_update(
             account=account,
             previous_schedule_enabled=previous_schedule_enabled,
@@ -419,6 +430,8 @@ class AccountStateService:
             preview_concurrency_time_enabled=account.preview_concurrency_time_enabled,
             preview_concurrency_time=account.preview_concurrency_time,
             ticket_pool_size=account.ticket_pool_size,
+            ticket_pool_drain_interval_ms=account.ticket_pool_drain_interval_ms,
+            invitation_code=account.invitation_code,
             stock_monitor_enabled=account.stock_monitor_enabled,
             stock_monitor_last_checked_at=account.stock_monitor_last_checked_at,
             stock_monitor_last_message=account.stock_monitor_last_message,

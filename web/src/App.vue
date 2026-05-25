@@ -162,10 +162,12 @@ async function openLogs() {
                     @start-stock-monitor="dashboard.startStockMonitor"
                     @stop-stock-monitor="dashboard.stopStockMonitor"
                     @pause="dashboard.pauseAccount"
-                    @update-ticket-pool-size="
-                        (id, value) =>
+                    @update-ticket-pool="
+                        (id, size, drainIntervalMs) =>
                             dashboard.updatePreferences(id, {
-                                ticket_pool_size: value,
+                                ticket_pool_size: size,
+                                ticket_pool_drain_interval_ms:
+                                    drainIntervalMs,
                             })
                     "
                     @clear-ticket-pool="dashboard.clearTicketPool"

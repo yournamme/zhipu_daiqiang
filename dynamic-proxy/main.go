@@ -58,14 +58,15 @@ type proxyHealth struct {
 }
 
 type envFileConfig struct {
-	KDLWhiteIPEnabled               bool
-	KDLSecretID                     string
-	KDLSecretKey                    string
-	KDLSecretTokenAPI               string
-	KDLSignature                    string
-	KDLWhiteIPAPI                   string
-	KDLWhiteIPList                  string
-	KDLWhiteIPWaitSeconds           int
+	ProxyWhiteIPEnabled             bool
+	ProxyWhiteIPSecretID            string
+	ProxyWhiteIPSecretKey           string
+	ProxyWhiteIPSecretTokenAPI      string
+	ProxyWhiteIPSignType            string
+	ProxyWhiteIPSignature           string
+	ProxyWhiteIPAPI                 string
+	ProxyWhiteIPList                string
+	ProxyWhiteIPWaitSeconds         int
 	ProxyPoolMaxLatencyMS           int
 	ProxyPoolFastWindow             int
 	ProxyPoolFailureCooldownSeconds int
@@ -143,47 +144,52 @@ func getenvInt(key string, defaultValue int) int {
 
 func loadEnvConfig() envFileConfig {
 	return envFileConfig{
-		KDLWhiteIPEnabled:               getenvBool("KDL_WHITEIP_ENABLED", false),
-		KDLSecretID:                     getenvDefault("KDL_SECRET_ID", ""),
-		KDLSecretKey:                    getenvDefault("KDL_SECRET_KEY", ""),
-		KDLSecretTokenAPI:               getenvDefault("KDL_SECRET_TOKEN_API", "https://auth.kdlapi.com/api/get_secret_token"),
-		KDLSignature:                    getenvDefault("KDL_SIGNATURE", ""),
-		KDLWhiteIPAPI:                   getenvDefault("KDL_WHITEIP_API", "https://dev.kdlapi.com/api/addwhiteip"),
-		KDLWhiteIPList:                  getenvDefault("KDL_WHITEIP_LIST", ""),
-		KDLWhiteIPWaitSeconds:           getenvInt("KDL_WHITEIP_WAIT_SECONDS", 65),
+		ProxyWhiteIPEnabled:             getenvBool("PROXY_WHITEIP_ENABLED", false),
+		ProxyWhiteIPSecretID:            getenvDefault("PROXY_WHITEIP_SECRET_ID", ""),
+		ProxyWhiteIPSecretKey:           getenvDefault("PROXY_WHITEIP_SECRET_KEY", ""),
+		ProxyWhiteIPSecretTokenAPI:      getenvDefault("PROXY_WHITEIP_SECRET_TOKEN_API", ""),
+		ProxyWhiteIPSignType:            getenvDefault("PROXY_WHITEIP_SIGN_TYPE", "token"),
+		ProxyWhiteIPSignature:           getenvDefault("PROXY_WHITEIP_SIGNATURE", ""),
+		ProxyWhiteIPAPI:                 getenvDefault("PROXY_WHITEIP_API", ""),
+		ProxyWhiteIPList:                getenvDefault("PROXY_WHITEIP_LIST", ""),
+		ProxyWhiteIPWaitSeconds:         getenvInt("PROXY_WHITEIP_WAIT_SECONDS", 5),
 		ProxyPoolMaxLatencyMS:           getenvInt("PROXY_POOL_MAX_LATENCY_MS", 3000),
 		ProxyPoolFastWindow:             getenvInt("PROXY_POOL_FAST_WINDOW", 32),
 		ProxyPoolFailureCooldownSeconds: getenvInt("PROXY_POOL_FAILURE_COOLDOWN_SECONDS", 60),
 	}
 }
 
-func getKDLSecretToken(client *http.Client, envCfg envFileConfig) (string, bool) {
-	if envCfg.KDLSecretKey == "" {
-		return envCfg.KDLSignature, envCfg.KDLSignature != ""
+func getProxyWhiteIPSecretToken(client *http.Client, envCfg envFileConfig) (string, bool) {
+	if envCfg.ProxyWhiteIPSecretKey == "" {
+		return envCfg.ProxyWhiteIPSignature, envCfg.ProxyWhiteIPSignature != ""
 	}
-	if envCfg.KDLSecretID == "" {
-		log.Println("[KDL] KDL_SECRET_KEY is set but KDL_SECRET_ID is empty, cannot fetch secret token")
+	if envCfg.ProxyWhiteIPSecretID == "" {
+		log.Println("[ProxyWhiteIP] PROXY_WHITEIP_SECRET_KEY is set but PROXY_WHITEIP_SECRET_ID is empty, cannot fetch secret token")
+		return "", false
+	}
+	if envCfg.ProxyWhiteIPSecretTokenAPI == "" {
+		log.Println("[ProxyWhiteIP] PROXY_WHITEIP_SECRET_TOKEN_API is empty, cannot fetch secret token")
 		return "", false
 	}
 	values := url.Values{}
-	values.Set("secret_id", envCfg.KDLSecretID)
-	values.Set("secret_key", envCfg.KDLSecretKey)
+	values.Set("secret_id", envCfg.ProxyWhiteIPSecretID)
+	values.Set("secret_key", envCfg.ProxyWhiteIPSecretKey)
 
-	log.Println("[KDL] Fetching KuaiDaili secret_token with SecretId/SecretKey...")
-	resp, err := client.PostForm(envCfg.KDLSecretTokenAPI, values)
+	log.Println("[ProxyWhiteIP] Fetching proxy provider secret_token with SecretId/SecretKey...")
+	resp, err := client.PostForm(envCfg.ProxyWhiteIPSecretTokenAPI, values)
 	if err != nil {
-		log.Printf("[KDL] Failed to fetch secret_token: %v", err)
+		log.Printf("[ProxyWhiteIP] Failed to fetch secret_token: %v", err)
 		return "", false
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err != nil {
-		log.Printf("[KDL] get_secret_token status=%d, failed to read response: %v", resp.StatusCode, err)
+		log.Printf("[ProxyWhiteIP] get_secret_token status=%d, failed to read response: %v", resp.StatusCode, err)
 		return "", false
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Printf("[KDL] get_secret_token returned status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		log.Printf("[ProxyWhiteIP] get_secret_token returned status=%d, body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
 		return "", false
 	}
 
@@ -196,64 +202,68 @@ func getKDLSecretToken(client *http.Client, envCfg envFileConfig) (string, bool)
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		log.Printf("[KDL] Failed to parse get_secret_token response: %v", err)
+		log.Printf("[ProxyWhiteIP] Failed to parse get_secret_token response: %v", err)
 		return "", false
 	}
 	if apiResp.Code != 0 || apiResp.Data.SecretToken == "" {
-		log.Printf("[KDL] get_secret_token failed with code=%d msg=%s", apiResp.Code, apiResp.Msg)
+		log.Printf("[ProxyWhiteIP] get_secret_token failed with code=%d msg=%s", apiResp.Code, apiResp.Msg)
 		return "", false
 	}
-	log.Printf("[KDL] secret_token fetched successfully, expire=%ds", apiResp.Data.Expire)
+	log.Printf("[ProxyWhiteIP] secret_token fetched successfully, expire=%ds", apiResp.Data.Expire)
 	return apiResp.Data.SecretToken, true
 }
 
-func addKDLWhiteIP(envCfg envFileConfig) {
-	if !envCfg.KDLWhiteIPEnabled {
+func addProxyWhiteIP(envCfg envFileConfig) {
+	if !envCfg.ProxyWhiteIPEnabled {
 		return
 	}
-	if envCfg.KDLSecretID == "" {
-		log.Println("[KDL] WhiteIP is enabled but KDL_SECRET_ID is empty, skipping")
+	if envCfg.ProxyWhiteIPSecretID == "" {
+		log.Println("[ProxyWhiteIP] WhiteIP is enabled but PROXY_WHITEIP_SECRET_ID is empty, skipping")
+		return
+	}
+	if envCfg.ProxyWhiteIPAPI == "" {
+		log.Println("[ProxyWhiteIP] WhiteIP is enabled but PROXY_WHITEIP_API is empty, skipping")
 		return
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	signature, ok := getKDLSecretToken(client, envCfg)
+	signature, ok := getProxyWhiteIPSecretToken(client, envCfg)
 	if !ok {
-		log.Println("[KDL] No usable secret_token/signature, skipping AddWhiteIP")
+		log.Println("[ProxyWhiteIP] No usable secret_token/signature, skipping WhiteIP API")
 		return
 	}
 
-	endpoint, err := url.Parse(envCfg.KDLWhiteIPAPI)
+	endpoint, err := url.Parse(envCfg.ProxyWhiteIPAPI)
 	if err != nil {
-		log.Printf("[KDL] Invalid KDL_WHITEIP_API %q: %v", envCfg.KDLWhiteIPAPI, err)
+		log.Printf("[ProxyWhiteIP] Invalid PROXY_WHITEIP_API %q: %v", envCfg.ProxyWhiteIPAPI, err)
 		return
 	}
 	query := endpoint.Query()
-	query.Set("secret_id", envCfg.KDLSecretID)
+	query.Set("secret_id", envCfg.ProxyWhiteIPSecretID)
 	query.Set("signature", signature)
-	query.Set("sign_type", "token")
-	if envCfg.KDLWhiteIPList != "" {
-		query.Set("iplist", envCfg.KDLWhiteIPList)
+	query.Set("sign_type", envCfg.ProxyWhiteIPSignType)
+	if envCfg.ProxyWhiteIPList != "" {
+		query.Set("iplist", envCfg.ProxyWhiteIPList)
 	}
 	endpoint.RawQuery = query.Encode()
 
-	log.Println("[KDL] Adding current server IP to KuaiDaili whitelist...")
+	log.Println("[ProxyWhiteIP] Adding current server IP to proxy provider whitelist...")
 	resp, err := client.Get(endpoint.String())
 	if err != nil {
-		log.Printf("[KDL] Failed to call AddWhiteIP API: %v", err)
+		log.Printf("[ProxyWhiteIP] Failed to call WhiteIP API: %v", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if err != nil {
-		log.Printf("[KDL] AddWhiteIP status=%d, failed to read response: %v", resp.StatusCode, err)
+		log.Printf("[ProxyWhiteIP] WhiteIP API status=%d, failed to read response: %v", resp.StatusCode, err)
 		return
 	}
 	bodyText := strings.TrimSpace(string(body))
-	log.Printf("[KDL] AddWhiteIP status=%d response=%s", resp.StatusCode, bodyText)
+	log.Printf("[ProxyWhiteIP] WhiteIP API status=%d response=%s", resp.StatusCode, bodyText)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		log.Println("[KDL] AddWhiteIP returned non-2xx status, proxy fetching will continue and may fail if whitelist is not ready")
+		log.Println("[ProxyWhiteIP] WhiteIP API returned non-2xx status, proxy fetching will continue and may fail if whitelist is not ready")
 		return
 	}
 	var apiResp struct {
@@ -261,12 +271,12 @@ func addKDLWhiteIP(envCfg envFileConfig) {
 		Msg  string `json:"msg"`
 	}
 	if err := json.Unmarshal(body, &apiResp); err == nil && apiResp.Code != 0 {
-		log.Printf("[KDL] AddWhiteIP failed with code=%d msg=%s, proxy fetching will continue", apiResp.Code, apiResp.Msg)
+		log.Printf("[ProxyWhiteIP] WhiteIP API failed with code=%d msg=%s, proxy fetching will continue", apiResp.Code, apiResp.Msg)
 		return
 	}
-	if envCfg.KDLWhiteIPWaitSeconds > 0 {
-		log.Printf("[KDL] Waiting %d seconds for whitelist propagation...", envCfg.KDLWhiteIPWaitSeconds)
-		time.Sleep(time.Duration(envCfg.KDLWhiteIPWaitSeconds) * time.Second)
+	if envCfg.ProxyWhiteIPWaitSeconds > 0 {
+		log.Printf("[ProxyWhiteIP] Waiting %d seconds for whitelist propagation...", envCfg.ProxyWhiteIPWaitSeconds)
+		time.Sleep(time.Duration(envCfg.ProxyWhiteIPWaitSeconds) * time.Second)
 	}
 }
 
@@ -1132,7 +1142,7 @@ func main() {
 	loadDotEnvFiles()
 	envCfg := loadEnvConfig()
 	runtimeEnv = envCfg
-	addKDLWhiteIP(envCfg)
+	addProxyWhiteIP(envCfg)
 
 	// Load configuration
 	cfg, err := loadConfig("config.yaml")

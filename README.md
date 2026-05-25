@@ -120,9 +120,9 @@ FALLBACK_PROXY_URL=http://127.0.0.1:17286
 FALLBACK_PROXY_TICKET_POOL_ONLY=0
 ```
 
-`NETWORK_EGRESS_MODE` 是启动默认出口模式，支持 `local`、`dynamic_proxy`、`zenproxy`。Web 端右上角可以运行时切换出口模式，切换后不需要重启服务；`.env` 只负责预先放好各模式需要的地址和密钥。
+`NETWORK_EGRESS_MODE` 是启动默认出口模式，支持 `local`、`dynamic_proxy`。Web 端右上角可以运行时切换出口模式，切换后不需要重启服务；`.env` 只负责预先放好动态代理需要的地址。
 
-只有配置了 `FALLBACK_PROXY_URL`，GLM Desk 才能切到动态代理模式。`start.bat` 也只会在 `FALLBACK_PROXY_URL` 指向本地 `dynamic-proxy` 端口（例如 `127.0.0.1:17286`）时启动 `dynamic-proxy`；如果该值为空，则动态代理模式不可用，`KDL_*` 和 `PROXY_POOL_*` 参数不会参与主链路。
+只有配置了 `FALLBACK_PROXY_URL`，GLM Desk 才能切到动态代理模式。`start.bat` 也只会在 `FALLBACK_PROXY_URL` 指向本地 `dynamic-proxy` 端口（例如 `127.0.0.1:17286`）时启动 `dynamic-proxy`；如果该值为空，则动态代理模式不可用，`PROXY_WHITEIP_*` 和 `PROXY_POOL_*` 参数不会参与主链路。
 
 如果只希望 ticket 池消耗阶段的 `/preview` 使用代理池，后续生成二维码、查询支付状态、验证码 challenge/verify 等流程走本地网络，可以开启：
 
@@ -132,49 +132,28 @@ FALLBACK_PROXY_TICKET_POOL_ONLY=1
 
 该开关只限制动态代理模式下 `.env` 中的 `FALLBACK_PROXY_URL` 兜底代理；只有 Web 端当前处于 `动态代理` 模式时，账号级 `proxy_url` 才会优先生效。
 
-Web 端切到 `本地` 模式时，会强制走本机出口，不使用 `.env` 中的 `FALLBACK_PROXY_URL`、ZenProxy relay，也不会使用账号级 `proxy_url`。这个模式适合排查本地网络和上游接口状态。
+Web 端切到 `本地` 模式时，会强制走本机出口，不使用 `.env` 中的 `FALLBACK_PROXY_URL`，也不会使用账号级 `proxy_url`。这个模式适合排查本地网络和上游接口状态。
 
-### ZenProxy relay 模式
-
-ZenProxy 的 `/api/relay` 是 HTTP 请求转发接口，不是传统 `http://ip:port` 代理，所以不要把它填到账号的 `proxy_url`。在 `.env` 里配置：
+如果你的代理池服务商要求先添加出口 IP 白名单，可以让 `dynamic-proxy` 启动时自动调用白名单接口，再拉取代理池：
 
 ```env
-NETWORK_EGRESS_MODE=zenproxy
-ZENPROXY_RELAY_URL=https://zenproxy.top/api/relay
-ZENPROXY_API_KEY=your_api_key
-ZENPROXY_COUNTRY=
-ZENPROXY_RESIDENTIAL=0
-ZENPROXY_CHATGPT=0
-ZENPROXY_GOOGLE=0
-ZENPROXY_RISK_MAX=
-ZENPROXY_TYPE=
-ZENPROXY_PROXY_ID=
-FALLBACK_PROXY_TICKET_POOL_ONLY=0
-```
-
-配置后可以在 Web 端右上角切换到 `ZenProxy`。系统会把原本请求 BigModel 的 URL、method、headers、cookies 和 body 转交给 ZenProxy relay；`/biz/pay/check?bizId=...` 这类 GET 参数会先合并进目标 URL，再交给 relay，避免参数丢失。
-
-如果 `FALLBACK_PROXY_TICKET_POOL_ONLY=1`，该限制同样作用于 ZenProxy：只有 ticket 池 drain 阶段的 `/preview` 会走 relay，后续普通重试、生成二维码、支付查询等流程走本地。
-
-如果使用快代理 DPS，可以让 `dynamic-proxy` 启动时自动调用快代理白名单接口，再拉取代理池：
-
-```env
-KDL_WHITEIP_ENABLED=1
-KDL_SECRET_ID=your_secret_id
-KDL_SECRET_KEY=your_secret_key
-KDL_SECRET_TOKEN_API=https://auth.kdlapi.com/api/get_secret_token
-KDL_SIGNATURE=
-KDL_WHITEIP_API=https://dev.kdlapi.com/api/addwhiteip
-KDL_WHITEIP_LIST=
-KDL_WHITEIP_WAIT_SECONDS=65
+PROXY_WHITEIP_ENABLED=1
+PROXY_WHITEIP_SECRET_ID=your_secret_id
+PROXY_WHITEIP_SECRET_KEY=your_secret_key
+PROXY_WHITEIP_SECRET_TOKEN_API=
+PROXY_WHITEIP_SIGN_TYPE=token
+PROXY_WHITEIP_SIGNATURE=
+PROXY_WHITEIP_API=
+PROXY_WHITEIP_LIST=
+PROXY_WHITEIP_WAIT_SECONDS=5
 PROXY_POOL_MAX_LATENCY_MS=3000
 PROXY_POOL_FAST_WINDOW=32
 PROXY_POOL_FAILURE_COOLDOWN_SECONDS=60
 ```
 
-启动时会先用 `KDL_SECRET_ID` + `KDL_SECRET_KEY` 调用快代理 `get_secret_token` 获取动态 `secret_token`，再以 `sign_type=token` 调用 AddWhiteIP。`KDL_SIGNATURE` 仅作为旧配置兼容字段；如果已经配置 `KDL_SECRET_KEY`，无需再手动填写 `KDL_SIGNATURE`。
+启动时会先用 `PROXY_WHITEIP_SECRET_ID` + `PROXY_WHITEIP_SECRET_KEY` 调用 `PROXY_WHITEIP_SECRET_TOKEN_API` 获取动态 `secret_token`，再按 `PROXY_WHITEIP_SIGN_TYPE` 调用 `PROXY_WHITEIP_API`。如果你的服务商直接提供固定签名令牌，也可以留空 `PROXY_WHITEIP_SECRET_KEY` 和 `PROXY_WHITEIP_SECRET_TOKEN_API`，只填写 `PROXY_WHITEIP_SIGNATURE`。
 
-`KDL_WHITEIP_LIST` 留空时，快代理会把当前调用机器的公网 IP 加入白名单；如果要显式指定多个 IP，按快代理接口要求填写 `iplist`。快代理白名单通常需要约 1 分钟生效，所以默认等待 `65` 秒后再拉取代理池。白名单接口失败不会阻断 GLM Desk 主服务启动，但 `dynamic-proxy` 日志会记录 `[KDL]` 开头的错误，后续代理池拉取可能因为白名单未生效而失败。
+`PROXY_WHITEIP_LIST` 留空时，由代理服务商接口自行识别当前出口 IP；如果要显式指定多个 IP，按你的服务商接口要求填写。`PROXY_WHITEIP_WAIT_SECONDS` 用来控制白名单接口调用后的等待时间，白名单接口失败不会阻断 GLM Desk 主服务启动，但 `dynamic-proxy` 日志会记录 `[ProxyWhiteIP]` 开头的错误，后续代理池拉取可能因为白名单未生效而失败。
 
 端口含义：
 
@@ -200,7 +179,7 @@ GLM Desk 请求 -> FALLBACK_PROXY_URL -> dynamic-proxy -> 内存代理池 -> 上
 
 注意：`.env` 只决定 GLM Desk 是否把请求发给本地 `dynamic-proxy`，不直接读取 `good_proxies.txt`。`good_proxies.txt` 必须写进 `dynamic-proxy/config.yaml` 的 `proxy_list_urls`，才会被 `dynamic-proxy` 加载、健康检测并放入内存代理池。
 
-如果当前处于 `动态代理` 模式，并且某个账号单独配置了 `proxy_url`，则该账号优先使用自己的 `proxy_url`，不会使用 `FALLBACK_PROXY_URL`。如果 Web 端切到 `本地` 或 `ZenProxy`，账号级 `proxy_url` 不参与请求。
+如果当前处于 `动态代理` 模式，并且某个账号单独配置了 `proxy_url`，则该账号优先使用自己的 `proxy_url`，不会使用 `FALLBACK_PROXY_URL`。如果 Web 端切到 `本地`，账号级 `proxy_url` 不参与请求。
 
 如果 `FALLBACK_PROXY_TICKET_POOL_ONLY=1`，`FALLBACK_PROXY_URL` 只会用于 ticket 池 drain 阶段提交 `/biz/pay/preview`。这个模式适合代理池 IP 时效性较短的场景：并发抢 `bizId` 时借助代理池分摊出口，拿到 `bizId` 后的创建支付二维码等后续请求回到本地出口，避免代理过期拖垮后半段链路。
 
@@ -243,7 +222,7 @@ start.bat
 
 这样运行时才是：先用 `proxy_checker.py` 过滤出 `good_proxies.txt`，再由 `dynamic-proxy` 读取该文件并维护代理池，最后 GLM Desk 通过 `FALLBACK_PROXY_URL` 走这个代理池。
 
-`dynamic-proxy` 每次启动和定时刷新代理池时都会重新健康检测代理，并按 TLS 连接耗时从快到慢排序。业务请求会从最快代理开始轮询，日志里会输出 `Latency sorted`，包含最快、最慢和平均耗时，方便判断代理池质量。
+`dynamic-proxy` 每次启动和定时刷新代理池时都会重新健康检测代理，并按 TLS 连接耗时从快到慢排序。业务请求会从延迟最低的代理开始轮询，日志里会输出 `Latency sorted`，包含最快、最慢和平均耗时，方便判断代理池质量。
 
 代理池调度可以通过 `.env` 控制：`PROXY_POOL_MAX_LATENCY_MS` 会在健康检测后丢弃超过阈值的慢代理；`PROXY_POOL_FAST_WINDOW` 会让运行时只在最快前 N 个代理里轮询；`PROXY_POOL_FAILURE_COOLDOWN_SECONDS` 会在某个代理连接失败或超时后临时冷却，避免继续把请求分给明显有问题的出口。
 
@@ -262,6 +241,7 @@ start.bat
 
 - 账号备注
 - Token
+- 邀请码：默认 `XOJGYOGNLN`，如需使用自己的邀请码可直接覆盖
 
 注意：
 
@@ -279,6 +259,7 @@ start.bat
 - 当前账号指纹 profile：例如 `chrome146 / chrome145 / edge146 / firefox149`
 - 套餐下拉选择器
 - 定时启动配置
+- Ticket 池大小和发射间隔
 - 账号状态
 - 最新支付二维码
 - 操作按钮
@@ -301,6 +282,11 @@ start.bat
 - `HH:MM:SS`
 
 实际保存时会统一格式化成 `HH:MM:SS`。
+
+Ticket 池发射间隔在 Web 端按账号设置，不再通过 `.env` 配置：
+
+- `0ms`：并行发射所有未使用 ticket 的 `/preview` 请求，谁先拿到 `bizId` 谁胜出
+- 大于 `0ms`：按固定间隔串行发射，例如 `300` 表示两次 `/preview` 之间间隔约 `300ms`
 
 ### 5. 立即启动
 
@@ -551,10 +537,8 @@ BIGMODEL_REFERER=https://www.bigmodel.cn/glm-coding
 BROWSER_IMPERSONATE=chrome146
 BOOTSTRAP_FINGERPRINT_MAX_RETRIES=99
 REQUEST_TIMEOUT_SECONDS=20
-TICKET_POOL_START_JITTER_MS=0
-TICKET_POOL_DRAIN_JITTER_MS=0
-TICKET_POOL_DRAIN_MODE=serial
-DEFAULT_LANGUAGE=zh-CN
+NETWORK_EGRESS_MODE=local
+DEFAULT_LANGUAGE=zh
 TENCENT_CAPTCHA_DOMAIN=https://turing.captcha.qcloud.com
 TENCENT_CAPTCHA_AID=196026326
 TENCENT_CAPTCHA_ENTRY_URL=https://www.bigmodel.cn/glm-coding
@@ -567,8 +551,23 @@ TENCENT_OCR_WORKERS=4
 TENCENT_OCR_TIMEOUT_SECONDS=6
 TENCENT_OCR_OPENCV_THREADS=1
 TENCENT_OCR_ONNX_THREADS=1
+TENCENT_OCR_IDLE_SHRINK_SECONDS=60
 RUNTIME_LOG_LEVEL=INFO
 RUNTIME_LOG_RETENTION_DAYS=7
+FALLBACK_PROXY_URL=
+FALLBACK_PROXY_TICKET_POOL_ONLY=0
+PROXY_WHITEIP_ENABLED=0
+PROXY_WHITEIP_SECRET_ID=
+PROXY_WHITEIP_SECRET_KEY=
+PROXY_WHITEIP_SECRET_TOKEN_API=
+PROXY_WHITEIP_SIGN_TYPE=token
+PROXY_WHITEIP_SIGNATURE=
+PROXY_WHITEIP_API=
+PROXY_WHITEIP_LIST=
+PROXY_WHITEIP_WAIT_SECONDS=5
+PROXY_POOL_MAX_LATENCY_MS=3000
+PROXY_POOL_FAST_WINDOW=32
+PROXY_POOL_FAILURE_COOLDOWN_SECONDS=60
 ```
 
 布尔值参数支持：
@@ -589,10 +588,10 @@ RUNTIME_LOG_RETENTION_DAYS=7
 | `BROWSER_IMPERSONATE` | `chrome146` | 全局兜底浏览器指纹 profile；账号实际请求优先用账号自己的随机 `browser_impersonate` |
 | `BOOTSTRAP_FINGERPRINT_MAX_RETRIES` | `99` | 点击“同步并换指纹”时的最大尝试次数；每轮先换一个账号级指纹，再完整同步上下文和套餐，失败才进入下一轮 |
 | `REQUEST_TIMEOUT_SECONDS` | `20` | 上游 HTTP 请求超时时间，单位秒 |
-| `TICKET_POOL_START_JITTER_MS` | `0` | ticket 池填满后、第一次 `/preview` 前的全局随机错峰上限，单位毫秒；账号级配置大于 `0` 时优先用账号级值 |
-| `TICKET_POOL_DRAIN_JITTER_MS` | `0` | ticket 池每张 ticket 发射间隔的全局随机错峰上限，单位毫秒；串行模式是在两次 `/preview` 之间 sleep，并行模式是按累计随机延迟错峰提交 |
-| `TICKET_POOL_DRAIN_MODE` | `serial` | ticket 池消耗模式：`serial` 为逐张串行请求，最稳；`parallel` 为错峰并行请求，谁先拿到 bizId 谁胜出，适合抢时间但更容易触发上游阈值 |
-| `DEFAULT_LANGUAGE` | `zh-CN` | 默认请求语言，会写入 `Accept-Language` 和 `Set-Language` |
+| `NETWORK_EGRESS_MODE` | `local` | 启动默认出口模式，只支持 `local` 和 `dynamic_proxy`；运行中也可在 Web 端切换 |
+| `FALLBACK_PROXY_URL` | 空 | 动态代理模式使用的代理池入口，例如 `http://127.0.0.1:17286` |
+| `FALLBACK_PROXY_TICKET_POOL_ONLY` | `0` | 为 `1` 时，动态代理只用于 ticket 池 drain 阶段的 `/preview` |
+| `DEFAULT_LANGUAGE` | `zh` | 默认请求语言，会写入 `Accept-Language` 和 `Set-Language` |
 | `TENCENT_CAPTCHA_DOMAIN` | `https://turing.captcha.qcloud.com` | 腾讯验证码域名 |
 | `TENCENT_CAPTCHA_AID` | `196026326` | 腾讯验证码业务 `aid` |
 | `TENCENT_CAPTCHA_ENTRY_URL` | `https://www.bigmodel.cn/glm-coding` | 腾讯验证码 `entry_url` 和默认 `Referer` |
@@ -605,8 +604,21 @@ RUNTIME_LOG_RETENTION_DAYS=7
 | `TENCENT_OCR_TIMEOUT_SECONDS` | `6` | 单次 OCR worker 超时秒数 |
 | `TENCENT_OCR_OPENCV_THREADS` | `1` | 每个 OCR worker 内 OpenCV 线程数，建议保持 `1`，避免多进程并发时线程爆炸 |
 | `TENCENT_OCR_ONNX_THREADS` | `1` | 每个 OCR worker 内 ONNXRuntime 推理线程数，建议保持 `1`，多 worker 并发时更稳 |
+| `TENCENT_OCR_IDLE_SHRINK_SECONDS` | `60` | OCR worker 空闲收缩时间，当前作为预留配置保留 |
 | `RUNTIME_LOG_LEVEL` | `INFO` | 正式运行日志级别 |
 | `RUNTIME_LOG_RETENTION_DAYS` | `7` | `app.log` 按天轮转保留天数 |
+| `PROXY_WHITEIP_ENABLED` | `0` | 是否启用代理服务商白名单接口；开启后 `dynamic-proxy` 启动时会尝试添加当前出口 IP |
+| `PROXY_WHITEIP_SECRET_ID` | 空 | 代理服务商 API 身份 ID；不用白名单接口时留空 |
+| `PROXY_WHITEIP_SECRET_KEY` | 空 | 代理服务商 API 密钥；不用动态令牌接口时留空 |
+| `PROXY_WHITEIP_SECRET_TOKEN_API` | 空 | 代理服务商动态令牌接口地址；仅在服务商需要先用密钥换取令牌时填写 |
+| `PROXY_WHITEIP_SIGN_TYPE` | `token` | 代理服务商签名方式，按自己的代理服务商文档填写 |
+| `PROXY_WHITEIP_SIGNATURE` | 空 | 代理服务商签名令牌；如果使用密钥自动换取令牌，可留空 |
+| `PROXY_WHITEIP_API` | 空 | 代理服务商白名单接口地址，模板不预设外部网站 |
+| `PROXY_WHITEIP_LIST` | 空 | 需要加入白名单的 IP 列表；留空时由代理服务商接口自行识别当前出口 IP |
+| `PROXY_WHITEIP_WAIT_SECONDS` | `5` | 调用白名单接口后等待代理池生效的时间，单位秒 |
+| `PROXY_POOL_MAX_LATENCY_MS` | `3000` | 代理健康检测后的最大允许延迟，单位毫秒；超过该值的代理会被丢弃 |
+| `PROXY_POOL_FAST_WINDOW` | `32` | 运行时只在延迟排序最靠前的 N 个代理内轮询；小于 `1` 时不限制窗口 |
+| `PROXY_POOL_FAILURE_COOLDOWN_SECONDS` | `60` | 某个代理连接失败后的冷却时间，单位秒；冷却期内不再分配请求给该代理 |
 
 补充说明：
 
@@ -616,7 +628,7 @@ RUNTIME_LOG_RETENTION_DAYS=7
 - 历史账号里的 `chrome / edge / firefox / chrome124 / chrome136 / firefox137 / firefox147` 会自动映射到当前支持的具体 profile
 - `BOOTSTRAP_FINGERPRINT_MAX_RETRIES` 小于 `1` 时会自动按 `1` 处理，避免配置错误导致完全不尝试
 - 如果你把 `TENCENT_OCR_WORKERS` 配得太高，OCR 并发会更猛，但内存占用也会跟着往上窜，别一上来就梭哈
-- ticket 池默认 `TICKET_POOL_DRAIN_MODE=serial`，这是为了避开 WAF 瞬时阈值；如果改成 `parallel`，建议同时配置 `TICKET_POOL_DRAIN_JITTER_MS` 做错峰，比如 `300~1000`，别又一把梭把 WAF 打醒
+- ticket 池发射间隔不再读取 `.env`，在 Web 端按账号设置；`0ms` 并行，大于 `0ms` 串行
 
 ## 已知说明
 

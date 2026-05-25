@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -34,10 +33,6 @@ class FingerprintHttpClient:
         if curl_requests is not None:
             return f"curl-cffi:{self.settings.browser_impersonate}"
         return "httpx"
-
-    @property
-    def relay_enabled(self) -> bool:
-        return bool(self.settings.zenproxy_relay_url and self.settings.zenproxy_api_key)
 
     # ------------------------------------------------------------------
     # Public request helpers
@@ -335,15 +330,6 @@ class FingerprintHttpClient:
                 if effective_proxy:
                     kwargs["proxies"] = {"http": effective_proxy, "https": effective_proxy}
                 else:
-                    relay_params = self._resolve_relay_params(
-                        method=method,
-                        url=url,
-                        params=params,
-                        allow_fallback_proxy=allow_fallback_proxy,
-                    )
-                    if relay_params:
-                        kwargs["url"] = self.settings.zenproxy_relay_url
-                        kwargs["params"] = relay_params
                     kwargs["proxies"] = {"all": ""}
                 return session.request(**kwargs)
             except Exception as exc:
@@ -379,16 +365,6 @@ class FingerprintHttpClient:
             )
             if effective_proxy:
                 client_kwargs["proxy"] = effective_proxy
-            else:
-                relay_params = self._resolve_relay_params(
-                    method=method,
-                    url=url,
-                    params=params,
-                    allow_fallback_proxy=allow_fallback_proxy,
-                )
-                if relay_params:
-                    kwargs["url"] = self.settings.zenproxy_relay_url
-                    kwargs["params"] = relay_params
             with httpx.Client(**client_kwargs) as client:
                 return client.request(**kwargs)
         except Exception as exc:
@@ -406,51 +382,6 @@ class FingerprintHttpClient:
         if self.settings.fallback_proxy_ticket_pool_only and not allow_fallback_proxy:
             return ""
         return self.settings.fallback_proxy_url
-
-    def _resolve_relay_params(
-        self,
-        *,
-        method: str,
-        url: str,
-        params: dict[str, Any] | None,
-        allow_fallback_proxy: bool,
-    ) -> dict[str, str]:
-        if get_network_mode_service().get_mode() != "zenproxy":
-            return {}
-        if not self.relay_enabled:
-            return {}
-        if self.settings.fallback_proxy_ticket_pool_only and not allow_fallback_proxy:
-            return {}
-
-        relay_params: dict[str, str] = {
-            "api_key": self.settings.zenproxy_api_key,
-            "url": self._merge_url_params(url, params),
-            "method": method.upper(),
-        }
-        optional_values = {
-            "country": self.settings.zenproxy_country,
-            "risk_max": self.settings.zenproxy_risk_max,
-            "type": self.settings.zenproxy_type,
-            "proxy_id": self.settings.zenproxy_proxy_id,
-        }
-        relay_params.update({key: value for key, value in optional_values.items() if value})
-        if self.settings.zenproxy_residential:
-            relay_params["residential"] = "true"
-        if self.settings.zenproxy_chatgpt:
-            relay_params["chatgpt"] = "true"
-        if self.settings.zenproxy_google:
-            relay_params["google"] = "true"
-        return relay_params
-
-    @staticmethod
-    def _merge_url_params(url: str, params: dict[str, Any] | None) -> str:
-        if not params:
-            return url
-        split = urlsplit(url)
-        query = split.query
-        appended = urlencode(params, doseq=True)
-        query = f"{query}&{appended}" if query else appended
-        return urlunsplit((split.scheme, split.netloc, split.path, query, split.fragment))
 
     # ------------------------------------------------------------------
     # Response helpers

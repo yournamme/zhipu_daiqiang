@@ -3,6 +3,8 @@ import { reactive, watch } from "vue";
 import { zhCN as copy } from "../locales/zhCN";
 import type { AccountImportPayload } from "../types/api";
 
+const DEFAULT_INVITATION_CODE = "XOJGYOGNLN";
+
 const props = defineProps<{
   show: boolean;
   loading: boolean;
@@ -15,7 +17,8 @@ const emit = defineEmits<{
 
 const form = reactive({
   label: "",
-  token: ""
+  token: "",
+  invitationCode: DEFAULT_INVITATION_CODE
 });
 
 watch(
@@ -24,6 +27,7 @@ watch(
     if (!show) {
       form.label = "";
       form.token = "";
+      form.invitationCode = DEFAULT_INVITATION_CODE;
     }
   }
 );
@@ -31,7 +35,8 @@ watch(
 function submit() {
   emit("submit", {
     label: form.label.trim(),
-    token: form.token.trim()
+    token: form.token.trim(),
+    invitation_code: form.invitationCode.trim() || DEFAULT_INVITATION_CODE
   });
 }
 </script>
@@ -48,6 +53,13 @@ function submit() {
           type="textarea"
           :placeholder="copy.importModal.tokenPlaceholder"
           :autosize="{ minRows: 8, maxRows: 14 }"
+        />
+      </n-form-item>
+      <n-form-item :label="copy.importModal.invitationCode">
+        <n-input
+          v-model:value="form.invitationCode"
+          autocomplete="off"
+          :placeholder="copy.importModal.invitationCodePlaceholder"
         />
       </n-form-item>
       <div class="modal-actions">

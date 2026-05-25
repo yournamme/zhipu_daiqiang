@@ -45,21 +45,9 @@ class Settings:
     tencent_ocr_onnx_threads: int
     runtime_log_level: str
     runtime_log_retention_days: int
-    ticket_pool_start_jitter_ms: int
-    ticket_pool_drain_jitter_ms: int
-    ticket_pool_drain_mode: str
     network_egress_mode: str
     fallback_proxy_url: str  # when set, used for accounts without their own proxy_url
     fallback_proxy_ticket_pool_only: bool
-    zenproxy_relay_url: str
-    zenproxy_api_key: str
-    zenproxy_country: str
-    zenproxy_residential: bool
-    zenproxy_chatgpt: bool
-    zenproxy_google: bool
-    zenproxy_risk_max: str
-    zenproxy_type: str
-    zenproxy_proxy_id: str
 
 
 @lru_cache(maxsize=1)
@@ -144,39 +132,13 @@ def get_settings() -> Settings:
             os.getenv("RUNTIME_LOG_RETENTION_DAYS", "7"),
             field_name="RUNTIME_LOG_RETENTION_DAYS",
         ),
-        ticket_pool_start_jitter_ms=_parse_bounded_int(
-            os.getenv("TICKET_POOL_START_JITTER_MS", "0"),
-            field_name="TICKET_POOL_START_JITTER_MS",
-            minimum=0,
-            maximum=10_000,
-        ),
-        ticket_pool_drain_jitter_ms=_parse_bounded_int(
-            os.getenv("TICKET_POOL_DRAIN_JITTER_MS", "0"),
-            field_name="TICKET_POOL_DRAIN_JITTER_MS",
-            minimum=0,
-            maximum=10_000,
-        ),
-        ticket_pool_drain_mode=_parse_choice(
-            os.getenv("TICKET_POOL_DRAIN_MODE", "serial"),
-            field_name="TICKET_POOL_DRAIN_MODE",
-            choices={"serial", "parallel"},
-        ),
         network_egress_mode=_parse_choice(
             os.getenv("NETWORK_EGRESS_MODE", "local"),
             field_name="NETWORK_EGRESS_MODE",
-            choices={"local", "dynamic_proxy", "zenproxy"},
+            choices={"local", "dynamic_proxy"},
         ),
         fallback_proxy_url=os.getenv("FALLBACK_PROXY_URL", "").strip(),
         fallback_proxy_ticket_pool_only=_parse_bool(os.getenv("FALLBACK_PROXY_TICKET_POOL_ONLY", "0")),
-        zenproxy_relay_url=os.getenv("ZENPROXY_RELAY_URL", "").strip().rstrip("/"),
-        zenproxy_api_key=os.getenv("ZENPROXY_API_KEY", "").strip(),
-        zenproxy_country=os.getenv("ZENPROXY_COUNTRY", "").strip(),
-        zenproxy_residential=_parse_bool(os.getenv("ZENPROXY_RESIDENTIAL", "0")),
-        zenproxy_chatgpt=_parse_bool(os.getenv("ZENPROXY_CHATGPT", "0")),
-        zenproxy_google=_parse_bool(os.getenv("ZENPROXY_GOOGLE", "0")),
-        zenproxy_risk_max=os.getenv("ZENPROXY_RISK_MAX", "").strip(),
-        zenproxy_type=os.getenv("ZENPROXY_TYPE", "").strip(),
-        zenproxy_proxy_id=os.getenv("ZENPROXY_PROXY_ID", "").strip(),
     )
 
 
