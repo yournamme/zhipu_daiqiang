@@ -20,7 +20,8 @@ import qrcode
 from app.clients.bigmodel_client import BigModelClient, get_bigmodel_client
 from app.clients.tencent_captcha_client import TencentCaptchaClient, get_tencent_captcha_client
 from app.config import get_settings
-from app.errors import BadRequestError, GlmDeskError, UpstreamRequestError
+from app.errors import AegisFlowError, BadRequestError, UpstreamRequestError
+from app.proxy_pool.service import get_builtin_proxy_pool_service, is_local_proxy_url
 from app.models import (
     AccountDetailResponse,
     AccountRecord,
@@ -125,10 +126,19 @@ class PaymentService:
         problems: list[str] = []
         if not bool(ocr_status.get("available")):
             missing = ocr_status.get("missing_dependencies") or []
-            problems.append(f"OCR 依赖不可用：{missing}")
+            if not bool(ocr_status.get("enabled")):
+                problems.append("OCR 已关闭：请设置 TENCENT_OCR_ENABLED=1")
+            elif missing:
+                problems.append(f"OCR 依赖不可用：{missing}")
+            elif ocr_status.get("last_bootstrap_error"):
+                problems.append(f"OCR 模型初始化失败：{ocr_status.get('last_bootstrap_error')}")
+            elif ocr_status.get("last_warmup_error"):
+                problems.append(f"OCR worker 预热失败：{ocr_status.get('last_warmup_error')}")
+            else:
+                problems.append("OCR 暂不可用：请查看运行日志")
         if not bool(tdc_status.get("available")):
             problems.extend(str(item) for item in (tdc_status.get("problems") or []))
-        if network_status.get("mode") == "dynamic_proxy" and not network_status.get("available"):
+        if network_status.get("mode") == "proxy_pool" and not bool(proxy_status.get("available")):
             problems.append(str(proxy_status.get("message") or "代理池不可用"))
         return {
             "status": "ok" if not problems else "degraded",
@@ -167,6 +177,28 @@ class PaymentService:
                 "host": host,
                 "port": port,
                 "message": f"代理池不可用：{proxy_url} ({exc})",
+            }
+
+        if is_local_proxy_url(proxy_url):
+            try:
+                builtin_status = get_builtin_proxy_pool_service().status_payload(port=port)
+            except Exception as exc:
+                return {
+                    "enabled": True,
+                    "available": False,
+                    "url": proxy_url,
+                    "host": host,
+                    "port": port,
+                    "service": "python",
+                    "message": f"Python 代理池配置不可用：{exc}",
+                }
+            return {
+                "enabled": True,
+                "available": bool(builtin_status.get("available")),
+                "url": proxy_url,
+                "host": host,
+                "port": port,
+                **builtin_status,
             }
 
         return {
@@ -861,7 +893,7 @@ class PaymentService:
                         flow=flow,
                         details={"attempt": attempt, **(details or {})},
                     )
-                except GlmDeskError as exc:
+                except AegisFlowError as exc:
                     if not self._is_retryable_flow_error(exc):
                         raise
                     result = {
@@ -940,7 +972,7 @@ class PaymentService:
                         persist_session=persist_session,
                         details={"attempt": attempt, **(details or {})},
                     )
-                except GlmDeskError as exc:
+                except AegisFlowError as exc:
                     if not self._is_retryable_flow_error(exc):
                         raise
                     result = {
@@ -2859,7 +2891,7 @@ class PaymentService:
         )
         return hydrated, result.to_payload()
 
-    def _is_retryable_flow_error(self, exc: GlmDeskError) -> bool:
+    def _is_retryable_flow_error(self, exc: AegisFlowError) -> bool:
         """Return whether a captcha/preview failure is safe to retry inside the same flow."""
         if isinstance(exc, UpstreamRequestError):
             return True

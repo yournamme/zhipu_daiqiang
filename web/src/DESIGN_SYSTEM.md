@@ -1,10 +1,10 @@
-# GLM Desk Design System
+# AegisFlow Design System
 
 Source: `ui-ux-pro-max` data-dense operations dashboard recommendation.
 
 ## Product Pattern
 
-GLM Desk is an operations dashboard, not a marketing page. The interface prioritizes fast scanning, dense account rows, clear action states, and QR visibility.
+AegisFlow is an operations dashboard, not a marketing page. The interface prioritizes fast scanning, dense account rows, clear action states, and QR visibility.
 
 ## Tokens
 

@@ -1,6 +1,6 @@
 export const zhCN = {
   app: {
-    title: "GLM Desk",
+    title: "AegisFlow",
     eyebrow: "本地运营控制台",
     description: "集中管理账号编排、支付二维码、定时任务和上下文排查。",
     transportPending: "传输状态待确认",
@@ -9,12 +9,17 @@ export const zhCN = {
     networkMode: "出口模式",
     networkModes: {
       local: "本地",
-      dynamicProxy: "动态代理",
+      proxyPool: "代理池",
     },
     networkLocalHint: "使用本机网络出口，不走代理池",
-    networkDynamicProxyHint: "需要配置 FALLBACK_PROXY_URL 后才可切换",
+    networkProxyPoolHint: "需要配置 FALLBACK_PROXY_URL 后才可切换",
+    proxyPoolConfirmTitle: "切换到代理池",
+    proxyPoolConfirmBody:
+      "请确认已经配置 proxy_pool.yaml 和可用代理源。未配置代理池或代理源不可用时，切换后支付链路会无法正常运行。",
+    proxyPoolConfirmCancel: "先不切换",
+    proxyPoolConfirmSubmit: "确认切换",
     primaryActionsLabel: "主要操作",
-    commandCenterLabel: "GLM Desk 控制中心",
+    commandCenterLabel: "AegisFlow 控制中心",
     viewLogs: "查看日志",
     logsTitle: "当日运行日志",
     logsToday: "今日日志",
@@ -40,7 +45,7 @@ export const zhCN = {
     columns: {
       account: "账号",
       product: "套餐",
-      schedule: "定时",
+      schedule: "执行配置",
       status: "状态",
       latestQr: "最新二维码",
       actions: "操作",
@@ -56,8 +61,15 @@ export const zhCN = {
     stockMonitor: "监控库存",
     stopStockMonitor: "停止监控",
     bizId: "bizId",
+    executionGroups: {
+      schedule: "定时",
+      preview: "Preview",
+      ticket: "Ticket",
+    },
     previewConcurrency: "Preview 并发",
+    previewConcurrencyShort: "并发",
     previewConcurrencyTime: "并发时间",
+    previewConcurrencyTimeShort: "时间",
     previewConcurrencyTimeEnableLabel: "启用并发时间",
     scheduleState: "定时",
     scheduleEnabled: "已启用",
@@ -102,9 +114,12 @@ export const zhCN = {
   },
   ticketPool: {
     enableLabel: "Ticket 池模式",
+    on: "开启",
     sizeLabel: "池大小",
+    sizeShort: "池大小",
     sizeHint: "1-50：先收集指定数量的 ticket，到时间再集中发起 /preview 抢购",
     intervalLabel: "发射间隔 ms",
+    intervalShort: "间隔 ms",
     intervalHint: "0 为并行请求；大于 0 时按固定间隔串行请求",
     off: "关闭",
     status: (collected: number, target: number) =>

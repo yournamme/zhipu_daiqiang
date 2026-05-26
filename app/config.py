@@ -48,6 +48,7 @@ class Settings:
     network_egress_mode: str
     fallback_proxy_url: str  # when set, used for accounts without their own proxy_url
     fallback_proxy_ticket_pool_only: bool
+    proxy_pool_config_path: Path | None
 
 
 @lru_cache(maxsize=1)
@@ -135,10 +136,11 @@ def get_settings() -> Settings:
         network_egress_mode=_parse_choice(
             os.getenv("NETWORK_EGRESS_MODE", "local"),
             field_name="NETWORK_EGRESS_MODE",
-            choices={"local", "dynamic_proxy"},
+            choices={"local", "proxy_pool"},
         ),
-        fallback_proxy_url=os.getenv("FALLBACK_PROXY_URL", "").strip(),
+        fallback_proxy_url=os.getenv("FALLBACK_PROXY_URL", "http://127.0.0.1:17286").strip(),
         fallback_proxy_ticket_pool_only=_parse_bool(os.getenv("FALLBACK_PROXY_TICKET_POOL_ONLY", "0")),
+        proxy_pool_config_path=_resolve_optional_path(os.getenv("PROXY_POOL_CONFIG", "proxy_pool.yaml")),
     )
 
 
@@ -146,6 +148,16 @@ def _resolve_path(raw: str) -> Path:
     normalized = (raw or "").strip()
     if not normalized:
         raise ValueError("DATA_DIR must not be empty")
+    path = Path(normalized).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return path
+
+
+def _resolve_optional_path(raw: str | None) -> Path | None:
+    normalized = (raw or "").strip()
+    if not normalized:
+        return None
     path = Path(normalized).expanduser()
     if not path.is_absolute():
         path = PROJECT_ROOT / path

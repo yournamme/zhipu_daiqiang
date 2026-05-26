@@ -1,1 +1,1 @@
-"""GLM Desk application package."""
+"""AegisFlow application package."""

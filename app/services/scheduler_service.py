@@ -7,7 +7,7 @@ import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.errors import GlmDeskError
+from app.errors import AegisFlowError
 from app.runtime_logging import get_runtime_log_service
 from app.services.account_state import get_account_state_service, utc_now_iso
 from app.services.payment_service import RunPausedError, get_payment_service
@@ -41,10 +41,10 @@ class SchedulerService:
             return
         self._clear_stale_schedule_statuses()
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run_loop, name="glm-desk-scheduler", daemon=True)
+        self._thread = threading.Thread(target=self._run_loop, name="aegisflow-scheduler", daemon=True)
         self._thread.start()
         self._start_enabled_stock_monitors()
-        threading.Thread(target=self.check_cached_accounts_once, name="glm-desk-account-check", daemon=True).start()
+        threading.Thread(target=self.check_cached_accounts_once, name="aegisflow-account-check", daemon=True).start()
         self.runtime_logs.log_system_event(
             stage="scheduler",
             status="started",
@@ -139,7 +139,7 @@ class SchedulerService:
                     status="success",
                     message="启动检查通过",
                 )
-            except GlmDeskError as exc:
+            except AegisFlowError as exc:
                 self.state_service.set_account_status(
                     account_id,
                     status="expired",
@@ -241,7 +241,7 @@ class SchedulerService:
         threading.Thread(
             target=self._run_account_flow,
             args=(account_id, source),
-            name=f"glm-desk-run-{account_id}",
+            name=f"aegisflow-run-{account_id}",
             daemon=True,
         ).start()
         return {"started": True, "status": "running"}
@@ -351,7 +351,7 @@ class SchedulerService:
             thread = threading.Thread(
                 target=self._run_stock_monitor,
                 args=(account_id, stop_event),
-                name=f"glm-desk-stock-{account_id}",
+                name=f"aegisflow-stock-{account_id}",
                 daemon=True,
             )
             self._stock_monitor_stops[account_id] = stop_event

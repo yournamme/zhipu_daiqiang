@@ -1,6 +1,6 @@
-# GLM Desk Web
+# AegisFlow Web
 
-Vue 3 + Vite + TypeScript frontend for the FastAPI GLM Desk service.
+Vue 3 + Vite + TypeScript frontend for the FastAPI AegisFlow service.
 
 ## Development
 

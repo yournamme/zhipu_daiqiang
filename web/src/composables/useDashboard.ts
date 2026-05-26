@@ -158,7 +158,7 @@ export function useDashboard() {
       const notification = new Notification(copy.app.title, {
         body: text,
         requireInteraction: true,
-        tag: "glm-desk-qr-generated",
+        tag: "aegisflow-qr-generated",
       });
       const firstLink = links[0]?.href;
       if (firstLink) {

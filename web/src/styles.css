@@ -308,9 +308,9 @@ textarea:focus-visible,
 .ops-table-head,
 .ops-row {
   display: grid;
-  grid-template-columns: minmax(150px, 0.75fr) minmax(120px, 0.55fr) minmax(170px, 0.75fr) minmax(220px, 1fr) 320px minmax(170px, 0.75fr);
+  grid-template-columns: minmax(150px, 0.7fr) minmax(150px, 0.65fr) minmax(390px, 1.45fr) minmax(210px, 0.85fr) 320px minmax(160px, 0.65fr);
   gap: 12px;
-  min-width: 1240px;
+  min-width: 1420px;
 }
 
 .ops-table-head {
@@ -415,16 +415,59 @@ textarea:focus-visible,
   align-content: center;
 }
 
-.schedule-config {
+.config-cell {
+  align-content: stretch;
+}
+
+.execution-config {
   display: grid;
   gap: 8px;
+  min-width: 0;
+  align-content: center;
+}
+
+.execution-row {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid rgba(220, 229, 241, 0.86);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.config-label,
+.config-inline-label {
+  color: var(--desk-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.config-label {
+  color: #475569;
+}
+
+.preview-config-grid {
+  display: grid;
+  grid-template-columns: minmax(84px, 0.7fr) minmax(188px, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .preview-race-control {
   display: grid;
-  grid-template-columns: 1fr 64px;
+  grid-template-columns: auto minmax(54px, 64px);
   align-items: center;
-  gap: 8px;
+  justify-content: start;
+  gap: 6px;
+  min-width: 0;
   color: var(--desk-muted);
   font-size: 12px;
   font-weight: 700;
@@ -432,6 +475,8 @@ textarea:focus-visible,
 
 .preview-race-control select {
   min-height: 34px;
+  width: 64px;
+  min-width: 0;
   border: 1px solid var(--desk-line);
   border-radius: 12px;
   padding: 4px 8px;
@@ -441,21 +486,99 @@ textarea:focus-visible,
 
 .preview-race-time-editor {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto auto minmax(108px, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
 }
 
-.ticket-pool-cell {
+.ticket-pool-editor {
   display: grid;
-  grid-template-columns: auto minmax(56px, 72px) minmax(120px, 1fr);
+  gap: 6px;
+  min-width: 0;
+}
+
+.ticket-pool-main {
+  display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.ticket-pool-state,
+.ticket-pool-progress {
+  min-height: 28px;
+  display: inline-grid;
+  align-items: center;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ticket-pool-state {
+  color: #166534;
+  background: #ecfdf5;
+  border: 1px solid #bbf7d0;
+}
+
+.ticket-pool-editor.is-disabled .ticket-pool-state {
+  color: #64748b;
+  background: #f8fafc;
+  border-color: #dbe5f1;
+}
+
+.ticket-pool-progress {
+  margin-left: auto;
+  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.ticket-pool-progress.is-ready {
+  color: #166534;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.ticket-pool-progress.is-filling {
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+.ticket-pool-fields {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.compact-number-field {
+  display: grid;
+  grid-template-columns: auto minmax(58px, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 112px;
+  color: var(--desk-muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pool-size-field {
+  width: 116px;
+}
+
+.pool-interval-field {
+  width: 158px;
 }
 
 .pool-size-input,
 .pool-interval-input {
   min-height: 34px;
+  width: 100%;
   min-width: 0;
   border: 1px solid var(--desk-line);
   border-radius: 12px;
@@ -464,25 +587,13 @@ textarea:focus-visible,
   background: #fff;
 }
 
-.pool-interval-control {
-  display: grid;
-  grid-template-columns: auto minmax(54px, 1fr);
-  align-items: center;
-  gap: 6px;
-  color: var(--desk-muted);
-  font-size: 12px;
-  font-weight: 700;
+.pool-size-input:disabled {
+  color: #64748b;
+  background: #f8fafc;
 }
 
-.pool-ready,
-.pool-filling {
-  color: #166534;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.pool-filling {
-  color: #92400e;
+.ticket-pool-clear {
+  min-height: 30px;
 }
 
 .time-input {
@@ -586,6 +697,17 @@ textarea:focus-visible,
   justify-content: flex-end;
   gap: 10px;
   margin-top: 10px;
+}
+
+.modal-copy {
+  margin: 0 0 10px;
+  color: var(--desk-ink);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.modal-copy.muted {
+  color: var(--desk-muted);
 }
 
 .context-grid {

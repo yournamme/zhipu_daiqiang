@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.errors import install_exception_handlers
+from app.proxy_pool.service import get_builtin_proxy_pool_service, should_auto_start_proxy_pool
 from app.runtime_logging import configure_logging, get_runtime_log_service
 from app.services.account_state import get_account_state_service
 from app.services.ocr_service import get_ocr_service
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 def create_app() -> FastAPI:
     """Build the FastAPI app."""
     app = FastAPI(
-        title="GLM Desk",
+        title="AegisFlow",
         version="0.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
@@ -42,22 +43,38 @@ def create_app() -> FastAPI:
             message="服务启动，开始执行缓存清理、OCR 预热和调度器初始化",
         )
         get_account_state_service().clear_payment_cache()
-        try:
-            get_ocr_service().warmup()
+        if should_auto_start_proxy_pool():
+            try:
+                get_builtin_proxy_pool_service().start()
+                runtime_logs.log_system_event(
+                    stage="proxy_pool",
+                    status="started",
+                    message="内置 Python 代理池服务已启动",
+                    details=get_builtin_proxy_pool_service().status_payload(),
+                )
+            except Exception as exc:  # pragma: no cover - startup best effort
+                logger.warning("Built-in proxy pool startup failed: %s", exc)
+                runtime_logs.log_system_event(
+                    stage="proxy_pool",
+                    status="failed",
+                    message=f"内置 Python 代理池服务启动失败：{exc}",
+                    details={"error": exc.__class__.__name__},
+                    level=logging.WARNING,
+                )
+        ocr_service = get_ocr_service()
+        if ocr_service.warmup_in_background():
             runtime_logs.log_system_event(
                 stage="ocr_warmup",
-                status="success",
-                message="OCR 预热完成",
-                details=get_ocr_service().status_payload(),
+                status="started",
+                message="OCR 预热已转入后台执行，服务启动不会等待模型下载",
+                details=ocr_service.status_payload(),
             )
-        except Exception as exc:  # pragma: no cover - startup best effort
-            logger.warning("OCR warmup failed: %s", exc)
+        else:
             runtime_logs.log_system_event(
                 stage="ocr_warmup",
-                status="failed",
-                message=f"OCR 预热失败：{exc}",
-                details={"error": exc.__class__.__name__},
-                level=logging.WARNING,
+                status="skipped",
+                message="OCR 预热未启动或已有预热任务在运行",
+                details=ocr_service.status_payload(),
             )
         health = get_scheduler_service().payment_service.health_payload()
         if health.get("status") != "ok":
@@ -78,6 +95,8 @@ def create_app() -> FastAPI:
     @app.on_event("shutdown")
     def stop_scheduler() -> None:
         get_scheduler_service().stop()
+        if should_auto_start_proxy_pool():
+            get_builtin_proxy_pool_service().stop()
         get_ocr_service().shutdown()
         get_runtime_log_service().log_system_event(
             stage="shutdown",

@@ -4,9 +4,12 @@
 .codex/
 .codex_tmp/
 
-.dynamic-proxy.log
-dynamic-proxy-test.log
-dynamic-proxy/good_proxies.txt
+.proxy-pool.log
+proxy-pool-test.log
+good_proxies.txt
+.dynamic-*.log
+*-proxy-test.log
+*/good_proxies.txt
 
 __pycache__/
 *.py[cod]
@@ -17,6 +20,8 @@ data/network_mode.json
 data/logs/
 data/sessions/*.json
 data/tdc_cache/
+dataSource/
+glm-coding.zip
 
 node_modules/
 web/dist/

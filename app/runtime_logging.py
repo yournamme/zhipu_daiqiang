@@ -57,7 +57,7 @@ def configure_logging(settings: Settings | None = None) -> Path:
 
     root_logger = logging.getLogger()
     for handler in root_logger.handlers:
-        if getattr(handler, "_glm_desk_runtime_handler", False):
+        if getattr(handler, "_aegisflow_runtime_handler", False):
             return log_dir
 
     handler = TimedRotatingFileHandler(
@@ -67,7 +67,7 @@ def configure_logging(settings: Settings | None = None) -> Path:
         backupCount=max(settings.runtime_log_retention_days, 3),
         encoding="utf-8",
     )
-    handler._glm_desk_runtime_handler = True  # type: ignore[attr-defined]
+    handler._aegisflow_runtime_handler = True  # type: ignore[attr-defined]
     handler.setLevel(getattr(logging, settings.runtime_log_level.upper(), logging.INFO))
     handler.setFormatter(
         logging.Formatter(
@@ -89,7 +89,7 @@ class RuntimeLogService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._lock = threading.Lock()
-        self.logger = logging.getLogger("glm_desk.runtime")
+        self.logger = logging.getLogger("aegisflow.runtime")
         configure_logging(self.settings)
         (self.settings.runtime_logs_dir / "accounts").mkdir(parents=True, exist_ok=True)
 

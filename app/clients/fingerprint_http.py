@@ -374,7 +374,7 @@ class FingerprintHttpClient:
             ) from exc
 
     def _resolve_effective_proxy(self, proxy_url: str | None, *, allow_fallback_proxy: bool) -> str:
-        if get_network_mode_service().get_mode() != "dynamic_proxy":
+        if get_network_mode_service().get_mode() != "proxy_pool":
             return ""
         explicit_proxy = (proxy_url or "").strip()
         if explicit_proxy:

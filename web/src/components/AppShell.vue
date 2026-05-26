@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { zhCN as copy } from "../locales/zhCN";
 import type { HealthPayload, NetworkEgressMode, NetworkModeOptionPayload } from "../types/api";
 
@@ -11,8 +11,10 @@ const healthProblems = computed(() => props.health?.problems || []);
 const proxyHealth = computed(() => props.health?.proxy);
 const network = computed(() => props.health?.network);
 const networkMode = computed<NetworkEgressMode>(() => network.value?.mode || "local");
-const proxyEnabled = computed(() => networkMode.value === "dynamic_proxy" && Boolean(proxyHealth.value?.enabled));
+const proxyEnabled = computed(() => networkMode.value === "proxy_pool" && Boolean(proxyHealth.value?.enabled));
 const proxyAvailable = computed(() => Boolean(proxyHealth.value?.available));
+const showProxyPoolConfirm = ref(false);
+const pendingNetworkMode = ref<NetworkEgressMode | null>(null);
 const networkOptions = computed(() => {
   const modes = (network.value?.modes || {}) as Partial<Record<NetworkEgressMode, NetworkModeOptionPayload>>;
   return [
@@ -22,9 +24,9 @@ const networkOptions = computed(() => {
       disabled: false,
     },
     {
-      label: copy.app.networkModes.dynamicProxy,
-      value: "dynamic_proxy",
-      disabled: !modes.dynamic_proxy?.available,
+      label: copy.app.networkModes.proxyPool,
+      value: "proxy_pool",
+      disabled: !modes.proxy_pool?.available,
     },
   ];
 });
@@ -33,7 +35,26 @@ function updateNetworkMode(mode: NetworkEgressMode, disabled?: boolean) {
   if (disabled || mode === networkMode.value) {
     return;
   }
+  if (mode === "proxy_pool") {
+    pendingNetworkMode.value = mode;
+    showProxyPoolConfirm.value = true;
+    return;
+  }
   emit("update-network-mode", mode);
+}
+
+function confirmProxyPoolMode() {
+  const mode = pendingNetworkMode.value;
+  pendingNetworkMode.value = null;
+  showProxyPoolConfirm.value = false;
+  if (mode) {
+    emit("update-network-mode", mode);
+  }
+}
+
+function cancelProxyPoolMode() {
+  pendingNetworkMode.value = null;
+  showProxyPoolConfirm.value = false;
 }
 
 const emit = defineEmits<{
@@ -100,5 +121,30 @@ const emit = defineEmits<{
     </header>
 
     <slot />
+
+    <n-modal
+      v-model:show="showProxyPoolConfirm"
+      preset="card"
+      class="desk-modal"
+      :title="copy.app.proxyPoolConfirmTitle"
+      :bordered="false"
+      @after-leave="pendingNetworkMode = null"
+    >
+      <p class="modal-copy">{{ copy.app.proxyPoolConfirmBody }}</p>
+      <p
+        v-if="proxyHealth?.message || network?.message"
+        class="modal-copy muted"
+      >
+        {{ proxyHealth?.message || network?.message }}
+      </p>
+      <div class="modal-actions">
+        <n-button secondary @click="cancelProxyPoolMode">
+          {{ copy.app.proxyPoolConfirmCancel }}
+        </n-button>
+        <n-button type="warning" @click="confirmProxyPoolMode">
+          {{ copy.app.proxyPoolConfirmSubmit }}
+        </n-button>
+      </div>
+    </n-modal>
   </main>
 </template>

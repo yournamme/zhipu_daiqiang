@@ -116,14 +116,25 @@ class OcrService:
         self._active_demands: dict[str, int] = {}
         self._warmed_worker_pids: set[int] = set()
         self._inflight_workers = 0
+        self._warmup_thread: threading.Thread | None = None
+        self._last_bootstrap_error = ""
+        self._last_warmup_error = ""
+        self._last_warmup_started_at = 0.0
+        self._last_warmup_finished_at = 0.0
 
     def status_payload(self) -> dict[str, Any]:
         missing = self._missing_dependencies()
         active_demand, warmed_worker_pids = self._capacity_snapshot()
+        available = (
+            bool(self.settings.tencent_ocr_enabled)
+            and not missing
+            and not self._last_bootstrap_error
+            and not self._last_warmup_error
+        )
         return {
             "enabled": self.settings.tencent_ocr_enabled,
             "adapter": "local-tenvision-process-pool",
-            "available": not missing,
+            "available": available,
             "missing_dependencies": missing,
             "include_debug": self.settings.tencent_ocr_include_debug,
             "workers": self.settings.tencent_ocr_workers,
@@ -134,10 +145,35 @@ class OcrService:
             "timeout_seconds": self.settings.tencent_ocr_timeout_seconds,
             "executor_ready": self._executor is not None,
             "engine_bootstrapped": self._engine_bootstrapped,
+            "warmup_running": self._warmup_thread is not None and self._warmup_thread.is_alive(),
+            "last_bootstrap_error": self._last_bootstrap_error,
+            "last_warmup_error": self._last_warmup_error,
+            "last_warmup_started_at": self._last_warmup_started_at,
+            "last_warmup_finished_at": self._last_warmup_finished_at,
         }
 
     def warmup(self, target_workers: int | None = None) -> None:
         self.ensure_capacity(target_workers or self.settings.tencent_ocr_workers)
+
+    def warmup_in_background(self, target_workers: int | None = None) -> bool:
+        """Start best-effort warmup without blocking FastAPI startup."""
+        if not self.settings.tencent_ocr_enabled:
+            return False
+        with self._bootstrap_lock:
+            if self._warmup_thread is not None and self._warmup_thread.is_alive():
+                return False
+            self._last_warmup_error = ""
+            self._last_warmup_started_at = time.time()
+            self._last_warmup_finished_at = 0.0
+            thread = threading.Thread(
+                target=self._background_warmup,
+                args=(target_workers or self.settings.tencent_ocr_workers,),
+                name="aegisflow-ocr-warmup",
+                daemon=True,
+            )
+            self._warmup_thread = thread
+            thread.start()
+            return True
 
     def reserve_capacity(self, demand: int) -> dict[str, Any]:
         normalized_demand = max(1, int(demand or 1))
@@ -176,31 +212,53 @@ class OcrService:
             self._bootstrap_engine_once()
             executor = self._ensure_executor()
             timeout = max(self.settings.tencent_ocr_timeout_seconds, 1)
-            for _ in range(3):
-                missing_workers = target_workers - len(self._warmed_worker_pids)
-                if missing_workers <= 0:
-                    break
-                # During concurrent account runs, existing warmed workers are
-                # likely busy with real OCR work. Only fill the gap; otherwise
-                # warmup tasks can sit ahead of payment OCR jobs and trigger
-                # false timeouts. When idle, submit a full wave to force spawn.
-                inflight_workers = self._inflight_snapshot()
-                warmup_count = missing_workers if inflight_workers else target_workers
-                futures = [
-                    self._submit_with_worker_slot(
-                        executor,
-                        _warmup_worker,
-                        index,
-                        acquire_timeout=0.1 if inflight_workers else timeout,
-                    )
-                    for index in range(warmup_count)
-                ]
-                for future in futures:
-                    result = future.result(timeout=timeout)
-                    pid = int(result.get("pid") or 0)
-                    if pid:
-                        self._warmed_worker_pids.add(pid)
+            try:
+                for _ in range(3):
+                    missing_workers = target_workers - len(self._warmed_worker_pids)
+                    if missing_workers <= 0:
+                        break
+                    # During concurrent account runs, existing warmed workers are
+                    # likely busy with real OCR work. Only fill the gap; otherwise
+                    # warmup tasks can sit ahead of payment OCR jobs and trigger
+                    # false timeouts. When idle, submit a full wave to force spawn.
+                    inflight_workers = self._inflight_snapshot()
+                    warmup_count = missing_workers if inflight_workers else target_workers
+                    futures = [
+                        self._submit_with_worker_slot(
+                            executor,
+                            _warmup_worker,
+                            index,
+                            acquire_timeout=0.1 if inflight_workers else timeout,
+                        )
+                        for index in range(warmup_count)
+                    ]
+                    for future in futures:
+                        result = future.result(timeout=timeout)
+                        pid = int(result.get("pid") or 0)
+                        if pid:
+                            self._warmed_worker_pids.add(pid)
+            except BrokenProcessPool as exc:
+                self._last_warmup_error = str(exc)
+                self.shutdown()
+                raise BadRequestError(
+                    "OCR worker 预热失败，通常是模型下载失败、模型缓存损坏或子进程启动失败。",
+                    details={"reason": str(exc)},
+                ) from exc
+            except Exception as exc:
+                self._last_warmup_error = str(exc)
+                raise
+            self._last_warmup_error = ""
         return self.status_payload()
+
+    def _background_warmup(self, target_workers: int) -> None:
+        try:
+            self.ensure_capacity(target_workers)
+            self._last_warmup_error = ""
+        except Exception as exc:  # pragma: no cover - startup best effort
+            self._last_warmup_error = str(exc)
+            logger.warning("OCR background warmup failed: %s", exc)
+        finally:
+            self._last_warmup_finished_at = time.time()
 
     def shutdown(self) -> None:
         with self._executor_lock:
@@ -272,7 +330,16 @@ class OcrService:
                 return
             started_at = time.perf_counter()
             _clear_proxy_env()
-            _load_adapter_module().get_engine()
+            try:
+                _load_adapter_module().get_engine()
+            except Exception as exc:
+                self._last_bootstrap_error = str(exc)
+                self.shutdown()
+                raise BadRequestError(
+                    "OCR 模型初始化失败，通常是 RapidOCR 模型下载失败或模型缓存损坏。",
+                    details={"reason": str(exc)},
+                ) from exc
+            self._last_bootstrap_error = ""
             self._engine_bootstrapped = True
             logger.info(
                 "OCR bootstrap finished in %.2f ms",

@@ -13,7 +13,7 @@ from app.runtime_logging import get_runtime_log_service
 logger = logging.getLogger(__name__)
 
 
-class GlmDeskError(Exception):
+class AegisFlowError(Exception):
     """Base application error."""
 
     def __init__(
@@ -21,7 +21,7 @@ class GlmDeskError(Exception):
         message: str,
         *,
         status_code: int = 400,
-        code: str = "glm_desk_error",
+        code: str = "aegisflow_error",
         details: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
@@ -41,7 +41,7 @@ class GlmDeskError(Exception):
         }
 
 
-class BadRequestError(GlmDeskError):
+class BadRequestError(AegisFlowError):
     """Raised when user input is incomplete or invalid."""
 
     def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
@@ -53,7 +53,7 @@ class BadRequestError(GlmDeskError):
         )
 
 
-class NotFoundError(GlmDeskError):
+class NotFoundError(AegisFlowError):
     """Raised when a requested resource does not exist."""
 
     def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
@@ -65,7 +65,7 @@ class NotFoundError(GlmDeskError):
         )
 
 
-class UpstreamRequestError(GlmDeskError):
+class UpstreamRequestError(AegisFlowError):
     """Raised when BigModel returns an error or invalid payload."""
 
     def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
@@ -80,8 +80,8 @@ class UpstreamRequestError(GlmDeskError):
 def install_exception_handlers(app: FastAPI) -> None:
     """Register shared exception handlers."""
 
-    @app.exception_handler(GlmDeskError)
-    async def handle_glm_desk_error(request: Request, exc: GlmDeskError) -> JSONResponse:
+    @app.exception_handler(AegisFlowError)
+    async def handle_aegisflow_error(request: Request, exc: AegisFlowError) -> JSONResponse:
         logger.warning("application error on %s: %s", request.url.path, exc.message)
         account_id = str(request.path_params.get("account_id") or "").strip()
         runtime_logs = get_runtime_log_service()
@@ -129,7 +129,7 @@ def install_exception_handlers(app: FastAPI) -> None:
                 details=details,
                 level=logging.ERROR,
             )
-        payload = GlmDeskError(
+        payload = AegisFlowError(
             "服务内部异常",
             status_code=500,
             code="internal_error",

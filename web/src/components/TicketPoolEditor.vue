@@ -38,27 +38,44 @@ function updateDrainInterval(event: Event) {
 </script>
 
 <template>
-    <div class="ticket-pool-cell">
-        <n-switch
-            :value="enabled"
-            :aria-label="copy.ticketPool.enableLabel"
-            @update:value="toggleEnabled"
-        />
-        <template v-if="enabled">
-            <input
-                class="pool-size-input"
-                type="number"
-                min="1"
-                max="50"
-                step="1"
-                :value="size"
-                :title="copy.ticketPool.sizeHint"
-                :aria-label="copy.ticketPool.sizeLabel"
-                :disabled="collected > 0"
-                @change="updateSize"
+    <div class="ticket-pool-editor" :class="{ 'is-disabled': !enabled }">
+        <div class="ticket-pool-main">
+            <n-switch
+                :value="enabled"
+                :aria-label="copy.ticketPool.enableLabel"
+                @update:value="toggleEnabled"
             />
-            <label class="pool-interval-control">
-                <span>{{ copy.ticketPool.intervalLabel }}</span>
+            <span class="ticket-pool-state">{{
+                enabled ? copy.ticketPool.on : copy.ticketPool.off
+            }}</span>
+            <span
+                v-if="enabled && target > 0"
+                :class="[
+                    'ticket-pool-progress',
+                    collected >= target ? 'is-ready' : 'is-filling',
+                ]"
+            >
+                {{ copy.ticketPool.status(collected, target) }}
+            </span>
+        </div>
+        <div v-if="enabled" class="ticket-pool-fields">
+            <label class="compact-number-field pool-size-field">
+                <span>{{ copy.ticketPool.sizeShort }}</span>
+                <input
+                    class="pool-size-input"
+                    type="number"
+                    min="1"
+                    max="50"
+                    step="1"
+                    :value="size"
+                    :title="copy.ticketPool.sizeHint"
+                    :aria-label="copy.ticketPool.sizeLabel"
+                    :disabled="collected > 0"
+                    @change="updateSize"
+                />
+            </label>
+            <label class="compact-number-field pool-interval-field">
+                <span>{{ copy.ticketPool.intervalShort }}</span>
                 <input
                     class="pool-interval-input"
                     type="number"
@@ -71,14 +88,9 @@ function updateDrainInterval(event: Event) {
                     @change="updateDrainInterval"
                 />
             </label>
-            <span
-                v-if="target > 0"
-                :class="collected >= target ? 'pool-ready' : 'pool-filling'"
-            >
-                {{ copy.ticketPool.status(collected, target) }}
-            </span>
             <n-button
                 v-if="collected > 0"
+                class="ticket-pool-clear"
                 size="tiny"
                 type="warning"
                 ghost
@@ -86,9 +98,6 @@ function updateDrainInterval(event: Event) {
             >
                 {{ copy.ticketPool.clearPool }}
             </n-button>
-        </template>
-        <span v-else class="schedule-time-readonly">{{
-            copy.ticketPool.off
-        }}</span>
+        </div>
     </div>
 </template>

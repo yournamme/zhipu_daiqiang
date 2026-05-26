@@ -1,0 +1,33 @@
+# Built-in Python proxy pool config.
+#
+# Proxy sources accept:
+#   - local files, relative to this config file
+#   - HTTP(S) URLs returning one proxy per line
+#
+# Supported upstream proxy formats:
+#   - 1.2.3.4:1080              (treated as socks5)
+#   - socks5://1.2.3.4:1080
+#   - socks5://user:pass@1.2.3.4:1080
+#   - http://1.2.3.4:8080
+
+proxy_list_urls:
+  # Generate this with:
+  #   python -m app.proxy_pool.checker --from-config proxy_pool.yaml --source proxies.txt --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt
+  - "good_proxies.txt"
+
+# Complex sources are parsed by extracting ip:port from each line.
+special_proxy_list_urls: []
+
+health_check_concurrency: 200
+update_interval_minutes: 5
+
+health_check:
+  total_timeout_seconds: 8
+  tls_handshake_threshold_seconds: 5
+  target: "www.bigmodel.cn:443"
+
+ports:
+  socks5_strict: ":17283"
+  socks5_relaxed: ":17284"
+  http_strict: ":17285"
+  http_relaxed: ":17286"

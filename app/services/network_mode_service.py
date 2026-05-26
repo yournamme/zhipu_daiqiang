@@ -10,7 +10,7 @@ from app.errors import BadRequestError
 from app.models import NetworkEgressMode
 from app.storage.json_store import JsonFileStore
 
-VALID_NETWORK_MODES: set[str] = {"local", "dynamic_proxy"}
+VALID_NETWORK_MODES: set[str] = {"local", "proxy_pool"}
 
 
 class NetworkModeService:
@@ -48,14 +48,14 @@ class NetworkModeService:
                 "message": "本地出口模式已启用",
                 "label": "本地",
             },
-            "dynamic_proxy": {
+            "proxy_pool": {
                 "available": bool(self.settings.fallback_proxy_url.strip()),
                 "message": (
-                    f"动态代理模式：{self.settings.fallback_proxy_url}"
+                    f"代理池模式：{self.settings.fallback_proxy_url}"
                     if self.settings.fallback_proxy_url.strip()
-                    else "动态代理模式缺少 FALLBACK_PROXY_URL"
+                    else "代理池模式缺少 FALLBACK_PROXY_URL"
                 ),
-                "label": "动态代理",
+                "label": "代理池",
                 "url": self.settings.fallback_proxy_url,
             },
         }

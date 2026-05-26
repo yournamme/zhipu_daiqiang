@@ -1,6 +1,6 @@
-# GLM Desk
+# AegisFlow
 
-`GLM Desk` 是一个本地运行的 `GLM Coding` 支付运营后台，用来管理多账号导入、套餐同步、自动验证码链路、预览下单、签单出二维码，以及定时启动任务。
+`AegisFlow` 是一个本地运行的 `GLM Coding` 支付运营后台，用来管理多账号导入、套餐同步、自动验证码链路、预览下单、签单出二维码，以及定时启动任务。
 
 当前页面已经不是早期的调试台，而是简约列表后台：
 
@@ -51,20 +51,81 @@
 - Node.js 用于腾讯验证码 TDC VM 运行
 - `start.bat` 首次启动会自动创建 `.venv` 并安装 Python 依赖
 
-## 启动
+## 最傻瓜版本地启动
 
-1. 可选：复制 `.env.example` 为 `.env`
-2. 双击 `start.bat`
-3. 打开 `http://127.0.0.1:8787`
+先说结论：本地模式不用代理池，也不用旧的 Go `dynamic-proxy`。装好 Python 和 Node.js，双击 `start.bat`，打开页面就完事儿，别一上来就把自己扔进配置海里游泳。
 
-默认启动地址：
+### 1. 先确认环境
 
-- `APP_HOST=127.0.0.1`
-- `APP_PORT=8787`
+在 PowerShell 里确认这几个命令能跑：
+
+```powershell
+py -3 --version
+node --version
+npm --version
+```
+
+推荐版本：
+
+- Python `3.12+`
+- Node.js LTS，能正常执行 `npm`
+
+### 2. 第一次启动
+
+直接双击项目根目录的 `start.bat`。
+
+第一次启动会自动做这些事：
+
+- 创建 `.venv`
+- 安装 Python 依赖
+- 安装并构建 Vue 前端
+- 启动 FastAPI 本地服务
+- 如果 `FALLBACK_PROXY_URL` 指向本机 `17286`，顺手准备内置 Python 代理池服务
+
+看到服务启动后，打开：
+
+```text
+http://127.0.0.1:8787
+```
+
+### 3. 最小本地配置
+
+正常情况下不需要手动创建 `.env`，项目会按默认值跑。如果你想显式配置，复制 `.env.example` 为 `.env`，本地模式保持下面这样就行：
+
+```env
+APP_HOST=127.0.0.1
+APP_PORT=8787
+DATA_DIR=data
+
+NETWORK_EGRESS_MODE=local
+FALLBACK_PROXY_URL=http://127.0.0.1:17286
+FALLBACK_PROXY_TICKET_POOL_ONLY=0
+PROXY_POOL_CONFIG=proxy_pool.yaml
+
+TENCENT_OCR_WORKERS=4
+RUNTIME_LOG_LEVEL=INFO
+RUNTIME_LOG_RETENTION_DAYS=7
+```
+
+这几个最常改：
+
+- `APP_PORT`：页面端口，默认 `8787`。端口冲突时换一个。
+- `DATA_DIR`：本地数据目录，默认 `data`。
+- `TENCENT_OCR_WORKERS`：OCR 并发，机器一般就用 `4`，卡就改成 `1` 或 `2`。
+- `NETWORK_EGRESS_MODE`：默认 `local`，也就是本机网络出口。要用代理池可以在 Web 右上角切换，不建议新手直接把默认值改成 `proxy_pool`。
+
+其他 BigModel、腾讯验证码协议类配置，没明确原因别乱动。那玩意儿不是旋钮，是地雷阵。
+
+### 4. 本地启动排错
+
+- 页面打不开：先看 `start.bat` 窗口有没有报错，再确认打开的是 `http://127.0.0.1:8787`。
+- 提示 Python 不存在：安装 Python 后重新打开 PowerShell，确认 `py -3 --version` 能输出版本。
+- 提示 npm 不存在：安装 Node.js LTS 后重新打开 PowerShell，确认 `npm --version` 能输出版本。
+- 端口被占用：改 `.env` 里的 `APP_PORT`，比如 `APP_PORT=8788`，然后重新双击 `start.bat`。
 
 ## 启动进程与 OCR Worker 说明
 
-本项目本地默认通过 [start.bat](E:/开源项目/glmDesk/start.bat) 启动：
+本项目本地默认通过 `start.bat` 启动：
 
 - `uvicorn app.main:app --host %APP_HOST% --port %APP_PORT% --reload`
 
@@ -99,42 +160,100 @@
 
 写进 `.env` 就行。
 
-## 动态代理与代理池
+## 傻瓜版代理池启动和配置
 
-项目支持通过本地 `dynamic-proxy` 做代理轮换。`start.bat` 会在检测到 `dynamic-proxy/dynamic-proxy.exe` 时自动后台启动它。
-
-### 启用方式
-
-1. 构建或准备 `dynamic-proxy/dynamic-proxy.exe`：
-
-```powershell
-cd dynamic-proxy
-go build -o dynamic-proxy.exe
-```
-
-2. 在 `.env` 中设置统一出口代理：
+先把话说明白：现在代理池是项目内置 Python 服务，不需要 `dynamic-proxy`，也不需要 Go。默认入口就是：
 
 ```env
-NETWORK_EGRESS_MODE=dynamic_proxy
 FALLBACK_PROXY_URL=http://127.0.0.1:17286
-FALLBACK_PROXY_TICKET_POOL_ONLY=0
 ```
 
-`NETWORK_EGRESS_MODE` 是启动默认出口模式，支持 `local`、`dynamic_proxy`。Web 端右上角可以运行时切换出口模式，切换后不需要重启服务；`.env` 只负责预先放好动态代理需要的地址。
+它的链路长这样：
 
-只有配置了 `FALLBACK_PROXY_URL`，GLM Desk 才能切到动态代理模式。`start.bat` 也只会在 `FALLBACK_PROXY_URL` 指向本地 `dynamic-proxy` 端口（例如 `127.0.0.1:17286`）时启动 `dynamic-proxy`；如果该值为空，则动态代理模式不可用，`PROXY_WHITEIP_*` 和 `PROXY_POOL_*` 参数不会参与主链路。
+```text
+AegisFlow -> 127.0.0.1:17286 -> 内置 Python 代理池 -> 上游代理 -> BigModel / Captcha
+```
 
-如果只希望 ticket 池消耗阶段的 `/preview` 使用代理池，后续生成二维码、查询支付状态、验证码 challenge/verify 等流程走本地网络，可以开启：
+### 1. 不用代理池怎么配
+
+啥都不用改，保持：
+
+```env
+NETWORK_EGRESS_MODE=local
+FALLBACK_PROXY_URL=http://127.0.0.1:17286
+PROXY_POOL_CONFIG=proxy_pool.yaml
+```
+
+Web 右上角出口模式保持“本地”。这种情况下支付链路走本机网络，代理池即使被服务准备好了，也不会参与请求。
+
+### 2. 使用代理池怎么配
+
+第一步，在项目根目录新建或更新 `proxies.txt`，一行一个上游代理：
+
+```text
+1.2.3.4:1080
+socks5://1.2.3.4:1080
+socks5://user:pass@1.2.3.4:1080
+http://1.2.3.4:8080
+```
+
+没有协议前缀时，项目默认按 SOCKS5 代理处理。
+
+第二步，确认 `proxy_pool.yaml` 里指向筛选后的代理文件：
+
+```yaml
+proxy_list_urls:
+  - "good_proxies.txt"
+
+health_check:
+  target: "www.bigmodel.cn:443"
+
+ports:
+  http_relaxed: ":17286"
+```
+
+第三步，先双击一次 `start.bat`，让项目创建 `.venv` 并安装依赖。已经启动过可以跳过这步。
+
+第四步，用内置检测脚本从 `proxies.txt` 筛出可用代理：
+
+```powershell
+.venv\Scripts\python.exe -m app.proxy_pool.checker --from-config proxy_pool.yaml --source proxies.txt --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
+```
+
+跑完后确认根目录生成了 `good_proxies.txt`，并且里面不是空的。空文件就说明这批代理基本废了，别硬上，硬上就是给自己添堵。
+
+第五步，重新双击 `start.bat`。
+
+第六步，打开 Web 页面右上角出口模式，切到“代理池”。页面会弹窗提醒：如果没有配置代理池或代理源不可用，切换后服务无法正常运行。确认你已经有 `good_proxies.txt` 后再点确认。
+
+### 3. 代理池推荐配置
+
+`.env` 里推荐保持：
+
+```env
+NETWORK_EGRESS_MODE=local
+FALLBACK_PROXY_URL=http://127.0.0.1:17286
+FALLBACK_PROXY_TICKET_POOL_ONLY=0
+PROXY_POOL_CONFIG=proxy_pool.yaml
+```
+
+推荐默认 `NETWORK_EGRESS_MODE=local`，需要时在 Web 端切到代理池。这样代理池炸了还能切回本地，不至于一启动就全线趴窝。
+
+如果你确定每次启动都要默认走代理池，再改成：
+
+```env
+NETWORK_EGRESS_MODE=proxy_pool
+```
+
+如果只想让 ticket 池消耗阶段的 `/preview` 走代理池，后续生成二维码、查询支付状态、验证码 challenge/verify 走本地，可以开启：
 
 ```env
 FALLBACK_PROXY_TICKET_POOL_ONLY=1
 ```
 
-该开关只限制动态代理模式下 `.env` 中的 `FALLBACK_PROXY_URL` 兜底代理；只有 Web 端当前处于 `动态代理` 模式时，账号级 `proxy_url` 才会优先生效。
+### 4. 代理服务商白名单
 
-Web 端切到 `本地` 模式时，会强制走本机出口，不使用 `.env` 中的 `FALLBACK_PROXY_URL`，也不会使用账号级 `proxy_url`。这个模式适合排查本地网络和上游接口状态。
-
-如果你的代理池服务商要求先添加出口 IP 白名单，可以让 `dynamic-proxy` 启动时自动调用白名单接口，再拉取代理池：
+如果你的代理服务商要求先把本机出口 IP 加白名单，再拉代理，才需要开启这些配置：
 
 ```env
 PROXY_WHITEIP_ENABLED=1
@@ -146,92 +265,26 @@ PROXY_WHITEIP_SIGNATURE=
 PROXY_WHITEIP_API=
 PROXY_WHITEIP_LIST=
 PROXY_WHITEIP_WAIT_SECONDS=5
-PROXY_POOL_MAX_LATENCY_MS=3000
-PROXY_POOL_FAST_WINDOW=32
-PROXY_POOL_FAILURE_COOLDOWN_SECONDS=60
 ```
 
-启动时会先用 `PROXY_WHITEIP_SECRET_ID` + `PROXY_WHITEIP_SECRET_KEY` 调用 `PROXY_WHITEIP_SECRET_TOKEN_API` 获取动态 `secret_token`，再按 `PROXY_WHITEIP_SIGN_TYPE` 调用 `PROXY_WHITEIP_API`。如果你的服务商直接提供固定签名令牌，也可以留空 `PROXY_WHITEIP_SECRET_KEY` 和 `PROXY_WHITEIP_SECRET_TOKEN_API`，只填写 `PROXY_WHITEIP_SIGNATURE`。
+不用白名单的服务商，保持 `PROXY_WHITEIP_ENABLED=0`，其他字段留空。
 
-`PROXY_WHITEIP_LIST` 留空时，由代理服务商接口自行识别当前出口 IP；如果要显式指定多个 IP，按你的服务商接口要求填写。`PROXY_WHITEIP_WAIT_SECONDS` 用来控制白名单接口调用后的等待时间，白名单接口失败不会阻断 GLM Desk 主服务启动，但 `dynamic-proxy` 日志会记录 `[ProxyWhiteIP]` 开头的错误，后续代理池拉取可能因为白名单未生效而失败。
+### 5. 代理池端口说明
 
-端口含义：
+- `http://127.0.0.1:17286`：HTTP relaxed，推荐给 AegisFlow 使用，兼容性最好。
+- `http://127.0.0.1:17285`：HTTP strict，会验证上游 TLS。
+- `socks5://127.0.0.1:17284`：SOCKS5 relaxed。
+- `socks5://127.0.0.1:17283`：SOCKS5 strict。
 
-- `http://127.0.0.1:17285`：HTTP strict，本地代理服务会验证上游 TLS
-- `http://127.0.0.1:17286`：HTTP relaxed，本地代理服务不验证上游 TLS，兼容性更好
-- `socks5://127.0.0.1:17283`：SOCKS5 strict
-- `socks5://127.0.0.1:17284`：SOCKS5 relaxed
+`FALLBACK_PROXY_URL` 默认填 `http://127.0.0.1:17286` 就行，别整花活。
 
-### 请求是否会走代理池
+### 6. 代理池排错
 
-会，但前提是 `.env` 配的是本地 `dynamic-proxy` 监听地址，例如：
-
-```env
-FALLBACK_PROXY_URL=http://127.0.0.1:17286
-FALLBACK_PROXY_TICKET_POOL_ONLY=0
-```
-
-实际链路是：
-
-```text
-GLM Desk 请求 -> FALLBACK_PROXY_URL -> dynamic-proxy -> 内存代理池 -> 上游代理 -> BigModel / Captcha
-```
-
-注意：`.env` 只决定 GLM Desk 是否把请求发给本地 `dynamic-proxy`，不直接读取 `good_proxies.txt`。`good_proxies.txt` 必须写进 `dynamic-proxy/config.yaml` 的 `proxy_list_urls`，才会被 `dynamic-proxy` 加载、健康检测并放入内存代理池。
-
-如果当前处于 `动态代理` 模式，并且某个账号单独配置了 `proxy_url`，则该账号优先使用自己的 `proxy_url`，不会使用 `FALLBACK_PROXY_URL`。如果 Web 端切到 `本地`，账号级 `proxy_url` 不参与请求。
-
-如果 `FALLBACK_PROXY_TICKET_POOL_ONLY=1`，`FALLBACK_PROXY_URL` 只会用于 ticket 池 drain 阶段提交 `/biz/pay/preview`。这个模式适合代理池 IP 时效性较短的场景：并发抢 `bizId` 时借助代理池分摊出口，拿到 `bizId` 后的创建支付二维码等后续请求回到本地出口，避免代理过期拖垮后半段链路。
-
-如果 ticket 池全部发射完仍未拿到 `bizId`，系统会切回普通 preview 竞速重试链路；在 `FALLBACK_PROXY_TICKET_POOL_ONLY=1` 时，这个重试链路同样不会再使用 `FALLBACK_PROXY_URL`，而是走本地出口。
-
-### 代理测试脚本
-
-`dynamic-proxy/proxy_checker.py` 用于在启动前预筛选代理。它会对每个代理执行：
-
-```text
-TCP 握手 -> SOCKS5 协商 -> CONNECT 目标主机 -> TLS 握手
-```
-
-推荐先筛出可用代理，再让 `dynamic-proxy` 读取筛选结果：
-
-```powershell
-cd dynamic-proxy
-python proxy_checker.py --from-config config.yaml --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
-```
-
-如果你已经有代理文件：
-
-```powershell
-cd dynamic-proxy
-python proxy_checker.py --source proxies.txt --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
-```
-
-生成 `good_proxies.txt` 后，在 `dynamic-proxy/config.yaml` 中加入：
-
-```yaml
-proxy_list_urls:
-  - "good_proxies.txt"
-```
-
-然后启动项目：
-
-```powershell
-start.bat
-```
-
-这样运行时才是：先用 `proxy_checker.py` 过滤出 `good_proxies.txt`，再由 `dynamic-proxy` 读取该文件并维护代理池，最后 GLM Desk 通过 `FALLBACK_PROXY_URL` 走这个代理池。
-
-`dynamic-proxy` 每次启动和定时刷新代理池时都会重新健康检测代理，并按 TLS 连接耗时从快到慢排序。业务请求会从延迟最低的代理开始轮询，日志里会输出 `Latency sorted`，包含最快、最慢和平均耗时，方便判断代理池质量。
-
-代理池调度可以通过 `.env` 控制：`PROXY_POOL_MAX_LATENCY_MS` 会在健康检测后丢弃超过阈值的慢代理；`PROXY_POOL_FAST_WINDOW` 会让运行时只在最快前 N 个代理里轮询；`PROXY_POOL_FAILURE_COOLDOWN_SECONDS` 会在某个代理连接失败或超时后临时冷却，避免继续把请求分给明显有问题的出口。
-
-### 代理配置建议
-
-- 目标是 `www.bigmodel.cn` 时，应使用国内可访问 BigModel 的代理源，不建议使用境外免费代理列表。
-- `proxy_checker.py` 的 `--target` 应与 `dynamic-proxy/config.yaml` 中 `health_check.target` 保持一致。
-- 免费代理波动很大，`good_proxies.txt` 只是当前时刻快照，正式运行前建议重新检测。
-- 如果 `dynamic-proxy` 日志出现 `No proxy available`，说明内存代理池为空，需要检查 `config.yaml` 代理源、`good_proxies.txt` 路径或健康检测阈值。
+- Web 提示代理池不可用：先确认 `good_proxies.txt` 存在且有内容。
+- 筛选结果为空：换代理源，或者把 `--max-latency 3000` 临时放宽到 `5000` 再试。
+- 启动时报端口占用：确认本机 `17283`、`17284`、`17285`、`17286` 没有被其他程序占用，重新双击 `start.bat` 会尝试清理这些本地监听。
+- 代理商要白名单：配置 `PROXY_WHITEIP_*`，否则代理拿到了也可能连不上。
+- 免费代理不稳定：正式跑前重新执行一次 checker，别拿昨天的 `good_proxies.txt` 赌今天的链路。
 
 ## 页面使用
 
@@ -402,7 +455,7 @@ Ticket 池发射间隔在 Web 端按账号设置，不再通过 `.env` 配置：
 
 ## 指纹策略
 
-`GLM Desk` 当前不是完整浏览器驱动，而是后端 HTTP 请求链路，所以做的是账号级稳定伪装：
+`AegisFlow` 当前不是完整浏览器驱动，而是后端 HTTP 请求链路，所以做的是账号级稳定伪装：
 
 - 每个账号首次导入时随机分配一个具体版本的 `browser_impersonate`
 - 当前随机候选值为：`chrome146 / chrome145 / edge146 / firefox149`
@@ -525,37 +578,19 @@ data/logs/runtime/
 
 ## 配置项
 
-可选环境变量见 `.env.example`：
+可选环境变量见 `.env.example`。现在模板分成两块：
+
+- **可自定义配置**：按本机端口、数据目录、代理池、OCR 并发和日志需求调整。
+- **默认配置**：BigModel / 腾讯验证码协议参数和稳定默认行为，通常不需要动，除非上游接口或排查目标明确变化。
 
 ```env
 APP_HOST=127.0.0.1
 APP_PORT=8787
 DATA_DIR=data
-BIGMODEL_API_BASE=https://www.bigmodel.cn/api
-BIGMODEL_ORIGIN=https://www.bigmodel.cn
-BIGMODEL_REFERER=https://www.bigmodel.cn/glm-coding
-BROWSER_IMPERSONATE=chrome146
-BOOTSTRAP_FINGERPRINT_MAX_RETRIES=99
-REQUEST_TIMEOUT_SECONDS=20
 NETWORK_EGRESS_MODE=local
-DEFAULT_LANGUAGE=zh
-TENCENT_CAPTCHA_DOMAIN=https://turing.captcha.qcloud.com
-TENCENT_CAPTCHA_AID=196026326
-TENCENT_CAPTCHA_ENTRY_URL=https://www.bigmodel.cn/glm-coding
-TENCENT_CAPTCHA_MAX_RETRIES=3
-TENCENT_CAPTCHA_MIN_CONFIDENCE=0.55
-TENCENT_CAPTCHA_NODE=node
-TENCENT_OCR_ENABLED=1
-TENCENT_OCR_INCLUDE_DEBUG=0
-TENCENT_OCR_WORKERS=4
-TENCENT_OCR_TIMEOUT_SECONDS=6
-TENCENT_OCR_OPENCV_THREADS=1
-TENCENT_OCR_ONNX_THREADS=1
-TENCENT_OCR_IDLE_SHRINK_SECONDS=60
-RUNTIME_LOG_LEVEL=INFO
-RUNTIME_LOG_RETENTION_DAYS=7
-FALLBACK_PROXY_URL=
+FALLBACK_PROXY_URL=http://127.0.0.1:17286
 FALLBACK_PROXY_TICKET_POOL_ONLY=0
+PROXY_POOL_CONFIG=proxy_pool.yaml
 PROXY_WHITEIP_ENABLED=0
 PROXY_WHITEIP_SECRET_ID=
 PROXY_WHITEIP_SECRET_KEY=
@@ -568,6 +603,28 @@ PROXY_WHITEIP_WAIT_SECONDS=5
 PROXY_POOL_MAX_LATENCY_MS=3000
 PROXY_POOL_FAST_WINDOW=32
 PROXY_POOL_FAILURE_COOLDOWN_SECONDS=60
+TENCENT_OCR_WORKERS=4
+RUNTIME_LOG_LEVEL=INFO
+RUNTIME_LOG_RETENTION_DAYS=7
+
+BIGMODEL_API_BASE=https://www.bigmodel.cn/api
+BIGMODEL_ORIGIN=https://www.bigmodel.cn
+BIGMODEL_REFERER=https://www.bigmodel.cn/glm-coding
+DEFAULT_LANGUAGE=zh
+BROWSER_IMPERSONATE=chrome146
+BOOTSTRAP_FINGERPRINT_MAX_RETRIES=99
+REQUEST_TIMEOUT_SECONDS=20
+TENCENT_CAPTCHA_DOMAIN=https://turing.captcha.qcloud.com
+TENCENT_CAPTCHA_AID=196026326
+TENCENT_CAPTCHA_ENTRY_URL=https://www.bigmodel.cn/glm-coding
+TENCENT_CAPTCHA_MAX_RETRIES=3
+TENCENT_CAPTCHA_MIN_CONFIDENCE=0.55
+TENCENT_CAPTCHA_NODE=node
+TENCENT_OCR_ENABLED=1
+TENCENT_OCR_INCLUDE_DEBUG=0
+TENCENT_OCR_TIMEOUT_SECONDS=6
+TENCENT_OCR_OPENCV_THREADS=1
+TENCENT_OCR_ONNX_THREADS=1
 ```
 
 布尔值参数支持：
@@ -575,39 +632,18 @@ PROXY_POOL_FAILURE_COOLDOWN_SECONDS=60
 - `1 / true / yes / on` 表示开启
 - 其他值视为关闭
 
-各参数含义如下：
+可自定义配置：
 
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
 | `APP_HOST` | `127.0.0.1` | Web 服务监听地址，`start.bat` 会优先读取这个值来启动 `uvicorn` |
 | `APP_PORT` | `8787` | Web 服务监听端口，`start.bat` 会先杀掉当前端口已占用进程再启动 |
 | `DATA_DIR` | `data` | 本地数据目录，保存账号、会话、任务、日志、TDC 缓存；相对路径会按项目根目录解析 |
-| `BIGMODEL_API_BASE` | `https://www.bigmodel.cn/api` | BigModel API 根地址 |
-| `BIGMODEL_ORIGIN` | `https://www.bigmodel.cn` | BigModel 请求头 `Origin` 默认值 |
-| `BIGMODEL_REFERER` | `https://www.bigmodel.cn/glm-coding` | BigModel 请求头 `Referer` 默认值 |
-| `BROWSER_IMPERSONATE` | `chrome146` | 全局兜底浏览器指纹 profile；账号实际请求优先用账号自己的随机 `browser_impersonate` |
-| `BOOTSTRAP_FINGERPRINT_MAX_RETRIES` | `99` | 点击“同步并换指纹”时的最大尝试次数；每轮先换一个账号级指纹，再完整同步上下文和套餐，失败才进入下一轮 |
-| `REQUEST_TIMEOUT_SECONDS` | `20` | 上游 HTTP 请求超时时间，单位秒 |
-| `NETWORK_EGRESS_MODE` | `local` | 启动默认出口模式，只支持 `local` 和 `dynamic_proxy`；运行中也可在 Web 端切换 |
-| `FALLBACK_PROXY_URL` | 空 | 动态代理模式使用的代理池入口，例如 `http://127.0.0.1:17286` |
-| `FALLBACK_PROXY_TICKET_POOL_ONLY` | `0` | 为 `1` 时，动态代理只用于 ticket 池 drain 阶段的 `/preview` |
-| `DEFAULT_LANGUAGE` | `zh` | 默认请求语言，会写入 `Accept-Language` 和 `Set-Language` |
-| `TENCENT_CAPTCHA_DOMAIN` | `https://turing.captcha.qcloud.com` | 腾讯验证码域名 |
-| `TENCENT_CAPTCHA_AID` | `196026326` | 腾讯验证码业务 `aid` |
-| `TENCENT_CAPTCHA_ENTRY_URL` | `https://www.bigmodel.cn/glm-coding` | 腾讯验证码 `entry_url` 和默认 `Referer` |
-| `TENCENT_CAPTCHA_MAX_RETRIES` | `3` | 预留的验证码客户端最大重试次数配置，目前主链路重试逻辑由支付服务控制 |
-| `TENCENT_CAPTCHA_MIN_CONFIDENCE` | `0.55` | OCR 点位门禁最低置信度，小于这个值会直接刷新验证码重跑 |
-| `TENCENT_CAPTCHA_NODE` | `node` | 跑腾讯 TDC VM 时使用的 Node.js 命令 |
-| `TENCENT_OCR_ENABLED` | `1` | 是否启用本地 OCR；关闭后自动识别不可用 |
-| `TENCENT_OCR_INCLUDE_DEBUG` | `0` | 是否在 OCR 结果中附带调试图像 base64，开启后日志和响应会更重 |
-| `TENCENT_OCR_WORKERS` | `4` | 系统 OCR worker 数量和最大并发；服务启动时会按该值一次性预热全部 worker |
-| `TENCENT_OCR_TIMEOUT_SECONDS` | `6` | 单次 OCR worker 超时秒数 |
-| `TENCENT_OCR_OPENCV_THREADS` | `1` | 每个 OCR worker 内 OpenCV 线程数，建议保持 `1`，避免多进程并发时线程爆炸 |
-| `TENCENT_OCR_ONNX_THREADS` | `1` | 每个 OCR worker 内 ONNXRuntime 推理线程数，建议保持 `1`，多 worker 并发时更稳 |
-| `TENCENT_OCR_IDLE_SHRINK_SECONDS` | `60` | OCR worker 空闲收缩时间，当前作为预留配置保留 |
-| `RUNTIME_LOG_LEVEL` | `INFO` | 正式运行日志级别 |
-| `RUNTIME_LOG_RETENTION_DAYS` | `7` | `app.log` 按天轮转保留天数 |
-| `PROXY_WHITEIP_ENABLED` | `0` | 是否启用代理服务商白名单接口；开启后 `dynamic-proxy` 启动时会尝试添加当前出口 IP |
+| `NETWORK_EGRESS_MODE` | `local` | 启动默认出口模式，只支持 `local` 和 `proxy_pool`；运行中也可在 Web 端切换 |
+| `FALLBACK_PROXY_URL` | `http://127.0.0.1:17286` | 代理池模式使用的本地入口，默认指向内置 Python 代理池 HTTP relaxed 端口 |
+| `FALLBACK_PROXY_TICKET_POOL_ONLY` | `0` | 为 `1` 时，代理池只用于 ticket 池 drain 阶段的 `/preview` |
+| `PROXY_POOL_CONFIG` | `proxy_pool.yaml` | 内置 Python 代理池配置文件，相对路径按项目根目录解析 |
+| `PROXY_WHITEIP_ENABLED` | `0` | 是否启用代理服务商白名单接口；开启后内置 Python 代理池启动时会尝试添加当前出口 IP |
 | `PROXY_WHITEIP_SECRET_ID` | 空 | 代理服务商 API 身份 ID；不用白名单接口时留空 |
 | `PROXY_WHITEIP_SECRET_KEY` | 空 | 代理服务商 API 密钥；不用动态令牌接口时留空 |
 | `PROXY_WHITEIP_SECRET_TOKEN_API` | 空 | 代理服务商动态令牌接口地址；仅在服务商需要先用密钥换取令牌时填写 |
@@ -619,6 +655,32 @@ PROXY_POOL_FAILURE_COOLDOWN_SECONDS=60
 | `PROXY_POOL_MAX_LATENCY_MS` | `3000` | 代理健康检测后的最大允许延迟，单位毫秒；超过该值的代理会被丢弃 |
 | `PROXY_POOL_FAST_WINDOW` | `32` | 运行时只在延迟排序最靠前的 N 个代理内轮询；小于 `1` 时不限制窗口 |
 | `PROXY_POOL_FAILURE_COOLDOWN_SECONDS` | `60` | 某个代理连接失败后的冷却时间，单位秒；冷却期内不再分配请求给该代理 |
+| `TENCENT_OCR_WORKERS` | `4` | 系统 OCR worker 数量和最大并发；服务启动时会按该值一次性预热全部 worker |
+| `RUNTIME_LOG_LEVEL` | `INFO` | 正式运行日志级别 |
+| `RUNTIME_LOG_RETENTION_DAYS` | `7` | `app.log` 按天轮转保留天数 |
+
+默认配置：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `BIGMODEL_API_BASE` | `https://www.bigmodel.cn/api` | BigModel API 根地址 |
+| `BIGMODEL_ORIGIN` | `https://www.bigmodel.cn` | BigModel 请求头 `Origin` 默认值 |
+| `BIGMODEL_REFERER` | `https://www.bigmodel.cn/glm-coding` | BigModel 请求头 `Referer` 默认值 |
+| `DEFAULT_LANGUAGE` | `zh` | 默认请求语言，会写入 `Accept-Language` 和 `Set-Language` |
+| `BROWSER_IMPERSONATE` | `chrome146` | 全局兜底浏览器指纹 profile；账号实际请求优先用账号自己的随机 `browser_impersonate` |
+| `BOOTSTRAP_FINGERPRINT_MAX_RETRIES` | `99` | 点击“同步并换指纹”时的最大尝试次数；每轮先换一个账号级指纹，再完整同步上下文和套餐，失败才进入下一轮 |
+| `REQUEST_TIMEOUT_SECONDS` | `20` | 上游 HTTP 请求超时时间，单位秒 |
+| `TENCENT_CAPTCHA_DOMAIN` | `https://turing.captcha.qcloud.com` | 腾讯验证码域名 |
+| `TENCENT_CAPTCHA_AID` | `196026326` | 腾讯验证码业务 `aid` |
+| `TENCENT_CAPTCHA_ENTRY_URL` | `https://www.bigmodel.cn/glm-coding` | 腾讯验证码 `entry_url` 和默认 `Referer` |
+| `TENCENT_CAPTCHA_MAX_RETRIES` | `3` | 预留的验证码客户端最大重试次数配置，目前主链路重试逻辑由支付服务控制 |
+| `TENCENT_CAPTCHA_MIN_CONFIDENCE` | `0.55` | OCR 点位门禁最低置信度，小于这个值会直接刷新验证码重跑 |
+| `TENCENT_CAPTCHA_NODE` | `node` | 跑腾讯 TDC VM 时使用的 Node.js 命令 |
+| `TENCENT_OCR_ENABLED` | `1` | 是否启用本地 OCR；关闭后自动识别不可用 |
+| `TENCENT_OCR_INCLUDE_DEBUG` | `0` | 是否在 OCR 结果中附带调试图像 base64，开启后日志和响应会更重 |
+| `TENCENT_OCR_TIMEOUT_SECONDS` | `6` | 单次 OCR worker 超时秒数 |
+| `TENCENT_OCR_OPENCV_THREADS` | `1` | 每个 OCR worker 内 OpenCV 线程数，建议保持 `1`，避免多进程并发时线程爆炸 |
+| `TENCENT_OCR_ONNX_THREADS` | `1` | 每个 OCR worker 内 ONNXRuntime 推理线程数，建议保持 `1`，多 worker 并发时更稳 |
 
 补充说明：
 

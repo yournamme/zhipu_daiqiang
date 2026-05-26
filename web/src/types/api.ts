@@ -28,7 +28,7 @@ export interface ProxyHealthPayload {
   message?: string;
 }
 
-export type NetworkEgressMode = "local" | "dynamic_proxy";
+export type NetworkEgressMode = "local" | "proxy_pool";
 
 export interface NetworkModeOptionPayload {
   available?: boolean;

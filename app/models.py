@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 PayType = Literal["ALI", "WE_CHAT"]
 PurchaseMode = Literal["new_purchase", "upgrade"]
-NetworkEgressMode = Literal["local", "dynamic_proxy"]
+NetworkEgressMode = Literal["local", "proxy_pool"]
 
 
 def _decode_default_invitation_code() -> str:
