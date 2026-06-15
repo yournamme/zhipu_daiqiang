@@ -89,7 +89,7 @@ export const zhCN = {
     token: "bigmodel_token_production",
     tokenPlaceholder: "粘贴 token 值",
     invitationCode: "邀请码",
-    invitationCodePlaceholder: "默认 XOJGYOGNLN，可按需自定义",
+    invitationCodePlaceholder: "可选，留空使用默认邀请码",
     cancel: "取消",
     submit: "确认导入并同步",
   },

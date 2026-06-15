@@ -600,7 +600,7 @@
           </label>
           <label>
             邀请码
-            <input id="import-invitation-code" autocomplete="off" value="XOJGYOGNLN" placeholder="默认 XOJGYOGNLN，可按需自定义">
+            <input id="import-invitation-code" autocomplete="off" placeholder="可选，留空使用默认邀请码">
           </label>
         </form>
       </div>
@@ -770,7 +770,7 @@
     async function handleImportAccount() {
       const label = byId("import-label").value.trim();
       const token = byId("import-token").value.trim();
-      const invitationCode = byId("import-invitation-code").value.trim() || "XOJGYOGNLN";
+      const invitationCode = byId("import-invitation-code").value.trim();
       if (!label || !token) {
         setStatus("账号备注和 Token 都得填，别整半拉子输入。", "bad");
         return;

@@ -294,7 +294,7 @@ PROXY_WHITEIP_WAIT_SECONDS=5
 
 - 账号备注
 - Token
-- 邀请码：默认 `XOJGYOGNLN`，如需使用自己的邀请码可直接覆盖
+- 邀请码：可选，留空使用默认邀请码
 
 注意：
 

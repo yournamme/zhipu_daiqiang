@@ -3,7 +3,7 @@
 ## Functional Regression
 
 - [ ] Dashboard loads `/healthz`, `/api/accounts`, and per-account details.
-- [ ] Import account submits label and token; invitation code is backend-defaulted.
+- [ ] Import account submits label and token; blank invitation code falls back to the backend default.
 - [ ] Refresh button reloads dashboard state.
 - [ ] Account name opens context modal with account, session, and latest task JSON.
 - [ ] Product selector persists `selected_product_id` through `PATCH /api/accounts/{id}`.

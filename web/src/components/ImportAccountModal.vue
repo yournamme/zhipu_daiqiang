@@ -3,8 +3,6 @@ import { reactive, watch } from "vue";
 import { zhCN as copy } from "../locales/zhCN";
 import type { AccountImportPayload } from "../types/api";
 
-const DEFAULT_INVITATION_CODE = "XOJGYOGNLN";
-
 const props = defineProps<{
   show: boolean;
   loading: boolean;
@@ -18,7 +16,7 @@ const emit = defineEmits<{
 const form = reactive({
   label: "",
   token: "",
-  invitationCode: DEFAULT_INVITATION_CODE
+  invitationCode: ""
 });
 
 watch(
@@ -27,7 +25,7 @@ watch(
     if (!show) {
       form.label = "";
       form.token = "";
-      form.invitationCode = DEFAULT_INVITATION_CODE;
+      form.invitationCode = "";
     }
   }
 );
@@ -36,7 +34,7 @@ function submit() {
   emit("submit", {
     label: form.label.trim(),
     token: form.token.trim(),
-    invitation_code: form.invitationCode.trim() || DEFAULT_INVITATION_CODE
+    invitation_code: form.invitationCode.trim()
   });
 }
 </script>

@@ -10,14 +10,8 @@ PayType = Literal["ALI", "WE_CHAT"]
 PurchaseMode = Literal["new_purchase", "upgrade"]
 NetworkEgressMode = Literal["local", "proxy_pool"]
 
-
-def _decode_default_invitation_code() -> str:
-    values = (79, 87, 83, 93, 66, 83, 90, 89, 84, 87)
-    seed = 23
-    return "".join(chr(value ^ (seed + (index % 7))) for index, value in enumerate(values))
-
-
-DEFAULT_INVITATION_CODE = _decode_default_invitation_code()
+# Fallback used when the user leaves the invitation code blank on import.
+DEFAULT_INVITATION_CODE = "XOJGYOGNLN"
 
 
 class TicketPoolEntry(BaseModel):
