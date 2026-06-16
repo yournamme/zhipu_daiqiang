@@ -35,7 +35,7 @@
 ## Risks
 
 - Current refresh keeps the legacy N+1 request pattern. Add `GET /api/dashboard` if account counts grow.
-- `start.bat` now runs npm install/build when `web/package.json` exists; first startup will be slower.
+- `start.bat` and `start.sh` now run npm install/build when `web/package.json` exists; first startup will be slower.
 - UI 文案已集中到 `web/src/locales/zhCN.ts`，Naive UI 通过 `zhCN/dateZhCN` 完成本地化配置。后续新增页面应优先复用该文案模块，避免继续散落硬编码字符串。
-- `web/dist` is ignored because it is generated. Build before production-like serving or let `start.bat` build it.
+- `web/dist` is ignored because it is generated. Build before production-like serving or let the startup script build it.
 - Legacy page should remain until real account flows are manually compared.
