@@ -18,7 +18,7 @@ The Vue SPA is implemented in parallel with the legacy Jinja page.
 
 ## Production-like Local Startup
 
-`start.bat` now installs frontend dependencies if needed, builds `web/dist`, and starts FastAPI. This keeps the normal one-click Windows startup path while allowing automatic legacy fallback if npm is unavailable.
+`start.bat` and `start.sh` now install frontend dependencies if needed, build `web/dist`, and start FastAPI. This keeps the normal one-click Windows startup path and adds a macOS/Linux terminal startup path while allowing automatic legacy fallback if npm is unavailable.
 
 ## Cutover Strategy
 

@@ -41,7 +41,7 @@
 
 ## 环境要求
 
-- Windows
+- Windows 或 macOS
 - Python 3.12+
 - Node.js 可用并在 `PATH` 中
 
@@ -49,18 +49,26 @@
 
 - Python 用于 FastAPI 服务和 OCR
 - Node.js 用于腾讯验证码 TDC VM 运行
-- `start.bat` 首次启动会自动创建 `.venv` 并安装 Python 依赖
+- `start.bat` / `start.sh` 首次启动会自动创建 `.venv` 并安装 Python 依赖
 
 ## 最傻瓜版本地启动
 
-先说结论：本地模式不用代理池，也不用旧的 Go `dynamic-proxy`。装好 Python 和 Node.js，双击 `start.bat`，打开页面就完事儿，别一上来就把自己扔进配置海里游泳。
+先说结论：本地模式不用代理池，也不用旧的 Go `dynamic-proxy`。装好 Python 和 Node.js，Windows 运行 `start.bat`，macOS 运行 `./start.sh`，打开页面就完事儿，别一上来就把自己扔进配置海里游泳。
 
 ### 1. 先确认环境
 
-在 PowerShell 里确认这几个命令能跑：
+Windows 在 PowerShell 里确认这几个命令能跑：
 
 ```powershell
 py -3 --version
+node --version
+npm --version
+```
+
+macOS 在 Terminal 里确认这几个命令能跑：
+
+```bash
+python3 --version
 node --version
 npm --version
 ```
@@ -72,7 +80,14 @@ npm --version
 
 ### 2. 第一次启动
 
-直接双击项目根目录的 `start.bat`。
+Windows 直接双击项目根目录的 `start.bat`。
+
+macOS 在项目根目录执行：
+
+```bash
+chmod +x start.sh
+./start.sh
+```
 
 第一次启动会自动做这些事：
 
@@ -118,16 +133,17 @@ RUNTIME_LOG_RETENTION_DAYS=7
 
 ### 4. 本地启动排错
 
-- 页面打不开：先看 `start.bat` 窗口有没有报错，再确认打开的是 `http://127.0.0.1:8787`。
-- 提示 Python 不存在：安装 Python 后重新打开 PowerShell，确认 `py -3 --version` 能输出版本。
-- 提示 npm 不存在：安装 Node.js LTS 后重新打开 PowerShell，确认 `npm --version` 能输出版本。
-- 端口被占用：改 `.env` 里的 `APP_PORT`，比如 `APP_PORT=8788`，然后重新双击 `start.bat`。
+- 页面打不开：先看 `start.bat` 窗口或 `start.sh` 终端有没有报错，再确认打开的是 `http://127.0.0.1:8787`。
+- 提示 Python 不存在：安装 Python 后重新打开终端。Windows 确认 `py -3 --version` 能输出版本；macOS 确认 `python3 --version` 是 `3.12+`。
+- 提示 npm 不存在：安装 Node.js LTS 后重新打开终端，确认 `npm --version` 能输出版本。
+- 端口被占用：改 `.env` 里的 `APP_PORT`，比如 `APP_PORT=8788`，然后重新运行启动脚本。
 
 ## 启动进程与 OCR Worker 说明
 
-本项目本地默认通过 `start.bat` 启动：
+本项目本地默认通过 `start.bat` 或 `start.sh` 启动：
 
-- `uvicorn app.main:app --host %APP_HOST% --port %APP_PORT% --reload`
+- Windows: `uvicorn app.main:app --host %APP_HOST% --port %APP_PORT% --reload`
+- macOS: `uvicorn app.main:app --host "$APP_HOST" --port "$APP_PORT" --reload`
 
 这意味着正常开发启动时通常会看到：
 
@@ -212,7 +228,7 @@ ports:
   http_relaxed: ":17286"
 ```
 
-第三步，先双击一次 `start.bat`，让项目创建 `.venv` 并安装依赖。已经启动过可以跳过这步。
+第三步，先运行一次启动脚本，让项目创建 `.venv` 并安装依赖。Windows 用 `start.bat`，macOS 用 `./start.sh`。已经启动过可以跳过这步。
 
 第四步，用内置检测脚本从 `proxies.txt` 筛出可用代理：
 
@@ -220,9 +236,15 @@ ports:
 .venv\Scripts\python.exe -m app.proxy_pool.checker --from-config proxy_pool.yaml --source proxies.txt --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
 ```
 
+macOS 对应命令：
+
+```bash
+.venv/bin/python -m app.proxy_pool.checker --from-config proxy_pool.yaml --source proxies.txt --target www.bigmodel.cn:443 --max-latency 3000 --timeout 6 --concurrency 200 --output good_proxies.txt --show-errors
+```
+
 跑完后确认根目录生成了 `good_proxies.txt`，并且里面不是空的。空文件就说明这批代理基本废了，别硬上，硬上就是给自己添堵。
 
-第五步，重新双击 `start.bat`。
+第五步，重新运行启动脚本。
 
 第六步，打开 Web 页面右上角出口模式，切到“代理池”。页面会弹窗提醒：如果没有配置代理池或代理源不可用，切换后服务无法正常运行。确认你已经有 `good_proxies.txt` 后再点确认。
 
@@ -282,7 +304,7 @@ PROXY_WHITEIP_WAIT_SECONDS=5
 
 - Web 提示代理池不可用：先确认 `good_proxies.txt` 存在且有内容。
 - 筛选结果为空：换代理源，或者把 `--max-latency 3000` 临时放宽到 `5000` 再试。
-- 启动时报端口占用：确认本机 `17283`、`17284`、`17285`、`17286` 没有被其他程序占用，重新双击 `start.bat` 会尝试清理这些本地监听。
+- 启动时报端口占用：确认本机 `17283`、`17284`、`17285`、`17286` 没有被其他程序占用，重新运行启动脚本会尝试清理这些本地监听。
 - 代理商要白名单：配置 `PROXY_WHITEIP_*`，否则代理拿到了也可能连不上。
 - 免费代理不稳定：正式跑前重新执行一次 checker，别拿昨天的 `good_proxies.txt` 赌今天的链路。
 
@@ -636,8 +658,8 @@ TENCENT_OCR_ONNX_THREADS=1
 
 | 参数 | 默认值 | 含义 |
 | --- | --- | --- |
-| `APP_HOST` | `127.0.0.1` | Web 服务监听地址，`start.bat` 会优先读取这个值来启动 `uvicorn` |
-| `APP_PORT` | `8787` | Web 服务监听端口，`start.bat` 会先杀掉当前端口已占用进程再启动 |
+| `APP_HOST` | `127.0.0.1` | Web 服务监听地址，启动脚本会优先读取这个值来启动 `uvicorn` |
+| `APP_PORT` | `8787` | Web 服务监听端口，启动脚本会先杀掉当前端口已占用进程再启动 |
 | `DATA_DIR` | `data` | 本地数据目录，保存账号、会话、任务、日志、TDC 缓存；相对路径会按项目根目录解析 |
 | `NETWORK_EGRESS_MODE` | `local` | 启动默认出口模式，只支持 `local` 和 `proxy_pool`；运行中也可在 Web 端切换 |
 | `FALLBACK_PROXY_URL` | `http://127.0.0.1:17286` | 代理池模式使用的本地入口，默认指向内置 Python 代理池 HTTP relaxed 端口 |
