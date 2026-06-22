@@ -24,7 +24,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%APP_PORT% .*LISTENIN
 
 if not exist .venv\Scripts\python.exe (
     echo [AegisFlow] Creating virtual environment...
-    py -3 -m venv .venv
+    py -3.13 -m venv .venv
     .venv\Scripts\python.exe -m pip install --upgrade pip
 )
 

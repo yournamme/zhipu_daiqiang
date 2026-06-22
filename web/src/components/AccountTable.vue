@@ -92,7 +92,7 @@ function selectedProduct(detail: AccountDetailResponse) {
 function previewConcurrencyValue(detail: AccountDetailResponse) {
     return Math.max(
         1,
-        Math.min(4, Number(detail.account.preview_concurrency || 1)),
+        Math.min(12, Number(detail.account.preview_concurrency || 1)),
     );
 }
 
@@ -100,7 +100,7 @@ function updatePreviewConcurrency(
     accountId: string,
     raw: string | number | null,
 ) {
-    const value = Math.max(1, Math.min(4, Number(raw || 1)));
+    const value = Math.max(1, Math.min(12, Number(raw || 1)));
     emit("updatePreviewConcurrency", accountId, value);
 }
 
@@ -311,6 +311,14 @@ function onTicketPoolUpdate(
                                             <option :value="2">2</option>
                                             <option :value="3">3</option>
                                             <option :value="4">4</option>
+                                            <option :value="5">5</option>
+                                            <option :value="6">6</option>
+                                            <option :value="7">7</option>
+                                            <option :value="8">8</option>
+                                            <option :value="9">9</option>
+                                            <option :value="10">10</option>
+                                            <option :value="11">11</option>
+                                            <option :value="12">12</option>
                                         </select>
                                     </label>
                                     <div class="preview-race-time-editor">

@@ -31,7 +31,7 @@ from app.storage.json_store import JsonFileStore
 TOKEN_COOKIE_KEY = "bigmodel_token_production"
 DEFAULT_SCHEDULED_START_TIME = "09:59:58"
 DEFAULT_PREVIEW_CONCURRENCY = 1
-MAX_PREVIEW_CONCURRENCY = 4
+MAX_PREVIEW_CONCURRENCY = 12
 
 try:
     SCHEDULE_TZ = ZoneInfo("Asia/Shanghai")

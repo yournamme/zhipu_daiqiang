@@ -298,8 +298,8 @@ class AccountPreferencesRequest(BaseModel):
         if value is None:
             return None
         normalized = int(value)
-        if normalized < 1 or normalized > 4:
-            raise ValueError("preview_concurrency 必须在 1 到 4 之间")
+        if normalized < 1 or normalized > 12:
+            raise ValueError("preview_concurrency 必须在 1 到 12 之间")
         return normalized
 
     @field_validator("scheduled_start_time")

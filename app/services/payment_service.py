@@ -332,7 +332,13 @@ class PaymentService:
         return self.state_service.get_account_detail(account_id)
 
     def import_account(self, request):
-        return self.state_service.import_account(request)
+        record = self.state_service.import_account(request)
+        account_id = record.id
+        try:
+            self.bootstrap_account(account_id)
+        except Exception:
+            pass
+        return self.state_service.get_account_detail(account_id)
 
     def update_preferences(self, account_id: str, request: AccountPreferencesRequest) -> AccountDetailResponse:
         return self.state_service.update_preferences(account_id, request)

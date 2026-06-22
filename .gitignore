@@ -7,6 +7,7 @@
 .proxy-pool.log
 proxy-pool-test.log
 good_proxies.txt
+proxies.txt
 .dynamic-*.log
 *-proxy-test.log
 */good_proxies.txt
