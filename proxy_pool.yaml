@@ -11,8 +11,8 @@
 #   - http://1.2.3.4:8080
 
 proxy_list_urls:
-  # refresh_kuaidaili.py 每 3 分钟写入 proxies.txt
-  # 代理池自动读取 + 健康检查筛选
+  # manual_refresh_proxy.bat 或一次性计划任务会写入 proxies.txt。
+  # 不会周期性提取 IP；代理池仅按下方 1 分钟间隔重读并健康检查该文件。
   - "proxies.txt"
 
 # Complex sources are parsed by extracting ip:port from each line.

@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-快代理代理池定时刷新脚本（hmacsha1 签名方式）
+快代理代理池手动/一次性刷新脚本（hmacsha1 签名方式）
 
 功能：
   1. 用 HMAC-SHA1 数字签名调用快代理 API 拉取私密代理
   2. 覆盖写入 proxies.txt
-  3. AegisFlow 代理池服务会自动定期读取 proxies.txt + 健康检查筛选
+  3. AegisFlow 代理池服务会定期读取 proxies.txt 并进行健康检查筛选
 
 用法：
   手动运行一次：
     .venv\\Scripts\\python.exe refresh_kuaidaili.py
 
-  用 Windows 计划任务每 3 分钟自动运行：
-    schtasks /create /tn "AegisFlowProxyRefresh" /tr "H:\\App\\daiqiang_zhipu\\daiqiang_tool_2\\.venv\\Scripts\\python.exe H:\\App\\daiqiang_zhipu\\daiqiang_tool_2\\refresh_kuaidaili.py" /sc minute /mo 3
+  在指定时间自动运行一次：
+    双击 setup_proxy_refresh.bat，创建一次性 Windows 计划任务
+
+  注意：不要创建周期性计划任务；每次提取都会消耗 50 个 IP 额度。
 
 安全说明：
   - 密钥从环境变量读取，不硬编码在脚本里
